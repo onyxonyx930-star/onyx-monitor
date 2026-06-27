@@ -7,8 +7,22 @@
   "installCommand": "npm install",
   "rewrites": [
     {
+      "source": "/api/cron/collect",
+      "destination": "/api/cron/collect"
+    },
+    {
+      "source": "/api/(.*)",
+      "destination": "/api"
+    },
+    {
       "source": "/((?!assets/).*)",
       "destination": "/index.html"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/collect",
+      "schedule": "0 * * * *"
     }
   ],
   "headers": [

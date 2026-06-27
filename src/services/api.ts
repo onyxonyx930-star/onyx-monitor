@@ -11,7 +11,7 @@ import type {
   Usuario,
 } from '../types'
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'https://onyx-monitor-api.onrender.com/api'
+const BASE_URL = import.meta.env.VITE_API_URL || '/api'
 
 class ApiError extends Error {
   status: number
