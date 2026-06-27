@@ -43,13 +43,13 @@ async function readBody(req: Request | any): Promise<any> {
 
 export default {
   async fetch(request: Request): Promise<Response> {
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type' } });
-    }
-
-    const { path, params } = parseUrl(request.url);
-
     try {
+      if (request.method === 'OPTIONS') {
+        return new Response(null, { status: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type' } });
+      }
+
+      const { path, params } = parseUrl(request.url);
+
       if (path === '/health') return json({ status: 'ok', timestamp: new Date().toISOString() });
       if (path.startsWith('/auth')) return handleAuth(request, path, params);
       if (path.startsWith('/equipamentos')) return handleEquipamentos(request, path, params);
@@ -59,10 +59,10 @@ export default {
       if (path.startsWith('/relatorios')) return handleRelatorios(request, path, params);
       if (path.startsWith('/agents')) return handleAgents(request, path, params);
       if (path.startsWith('/auditoria')) return handleAuditoria(request, path, params);
-      return error('Rota nÃ£o encontrada', 404);
+      return error('Rota não encontrada', 404);
     } catch (e: any) {
-      console.error('API Error:', e?.message || e);
-      return error(e?.message || 'Erro interno', 500);
+      console.error('API Error:', e?.stack || e?.message || e);
+      return json({ success: false, message: e?.message || 'Erro interno', stack: e?.stack }, 500);
     }
   }
 };
