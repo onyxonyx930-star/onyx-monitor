@@ -1,51 +1,53 @@
 import express from 'express';
 import cors from 'cors';
-import { initDatabase } from '../server/database';
-import equipamentosRouter from '../server/routes/equipamentos';
-import leiturasRouter from '../server/routes/leituras';
-import suprimentosRouter from '../server/routes/suprimentos';
-import alertasRouter from '../server/routes/alertas';
-import relatoriosRouter from '../server/routes/relatorios';
-import authRouter from '../server/routes/auth';
-import agentsRouter from '../server/routes/agents';
-import auditoriaRouter from '../server/routes/auditoria';
-import { authMiddleware } from '../server/routes/auth';
 
 const app = express();
-let dbInitialized = false;
+let handler: any;
+let loadError: any;
 
-app.use(cors({ origin: true, credentials: true }));
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+try {
+  const authMod = await import('../server/routes/auth.js');
+  const equipamentosMod = await import('../server/routes/equipamentos.js');
+  const leiturasMod = await import('../server/routes/leituras.js');
+  const suprimentosMod = await import('../server/routes/suprimentos.js');
+  const alertasMod = await import('../server/routes/alertas.js');
+  const relatoriosMod = await import('../server/routes/relatorios.js');
+  const agentsMod = await import('../server/routes/agents.js');
+  const auditoriaMod = await import('../server/routes/auditoria.js');
+  const dbMod = await import('../server/database.js');
 
-app.use('/api/auth', authRouter);
-app.use('/api/agents', agentsRouter);
-app.use('/api/equipamentos', authMiddleware, equipamentosRouter);
-app.use('/api/leituras', authMiddleware, leiturasRouter);
-app.use('/api/suprimentos', authMiddleware, suprimentosRouter);
-app.use('/api/alertas', authMiddleware, alertasRouter);
-app.use('/api/relatorios', authMiddleware, relatoriosRouter);
-app.use('/api/auditoria', authMiddleware, auditoriaRouter);
+  app.use(cors({ origin: true, credentials: true }));
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ extended: true }));
 
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
+  app.use('/api/auth', authMod.default);
+  app.use('/api/agents', agentsMod.default);
+  app.use('/api/equipamentos', authMod.authMiddleware, equipamentosMod.default);
+  app.use('/api/leituras', authMod.authMiddleware, leiturasMod.default);
+  app.use('/api/suprimentos', authMod.authMiddleware, suprimentosMod.default);
+  app.use('/api/alertas', authMod.authMiddleware, alertasMod.default);
+  app.use('/api/relatorios', authMod.authMiddleware, relatoriosMod.default);
+  app.use('/api/auditoria', authMod.authMiddleware, auditoriaMod.default);
 
-app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error('Unhandled error:', err);
-  res.status(500).json({ success: false, message: 'Erro interno do servidor' });
-});
+  app.get('/api/health', (_req, res) => {
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  });
 
-async function ensureDb() {
-  if (!dbInitialized) {
-    await initDatabase();
-    dbInitialized = true;
-  }
+  let dbInitialized = false;
+
+  handler = async (req: any, res: any) => {
+    if (!dbInitialized) {
+      await dbMod.initDatabase();
+      dbInitialized = true;
+    }
+    return app(req, res);
+  };
+} catch (e: any) {
+  loadError = e?.message || String(e);
+  console.error('Module load error:', loadError);
+  handler = async (req: any, res: any) => {
+    res.status(500).json({ error: 'Module load failed', message: loadError });
+  };
 }
-
-const handler = async (req: any, res: any) => {
-  await ensureDb();
-  return app(req, res);
-};
 
 export default handler;
