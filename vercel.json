@@ -1,8 +1,9 @@
 {
   "version": 2,
   "name": "onyx-monitor",
+  "buildCommand": "npx vite build",
   "outputDirectory": "dist",
-  "framework": null,
+  "framework": "vite",
   "installCommand": "npm install",
   "rewrites": [
     {
