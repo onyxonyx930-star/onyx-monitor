@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     buildCommand: npm install
-    startCommand: node --import tsx server/index.ts
+    startCommand: npx tsx server/index.ts
     envVars:
       - NODE_ENV=production
       - PORT=3001
