@@ -82,7 +82,12 @@ function getSegment(path: string, index: number): string | undefined {
 }
 
 async function readBody(req: Request): Promise<any> {
-  try { return await req.json(); } catch { return {}; }
+  try {
+    const cloned = req.clone();
+    return await cloned.json();
+  } catch {
+    try { return await req.json(); } catch { return {}; }
+  }
 }
 
 const json_ = _json;
