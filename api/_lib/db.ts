@@ -1,6 +1,7 @@
-import { Pool } from 'pg';
+import pg from 'pg';
+const { Pool } = pg;
 
-let pool: Pool | null = null;
+let pool: any = null;
 
 export function getDb(): Pool {
   if (!pool) {

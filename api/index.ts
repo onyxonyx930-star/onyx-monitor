@@ -35,9 +35,9 @@ function getSegment(path: string, index: number): string | undefined {
 }
 
 async function readBody(req: Request | any): Promise<any> {
-  if (typeof req.json === 'function') return readBody(req);
-  if (typeof req.body === 'object') return req.body;
-  const text = typeof req.text === 'function' ? await req.text() : await new Response(req).text();
+  if (typeof req.json === 'function') return req.json();
+  if (typeof req.body === 'object' && req.body !== null) return req.body;
+  const text = typeof req.text === 'function' ? await req.text() : '';
   return text ? JSON.parse(text) : {};
 }
 
@@ -61,7 +61,7 @@ export default {
       if (path.startsWith('/auditoria')) return handleAuditoria(request, path, params);
       return error('Rota nÃ£o encontrada', 404);
     } catch (e: any) {
-      console.error('API Error:', e);
+      console.error('API Error:', e?.message || e);
       return error(e?.message || 'Erro interno', 500);
     }
   }
