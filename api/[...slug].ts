@@ -1,7 +1,7 @@
-import app from './index';
+import handler from './index.js';
 
-const handler = async (req: any, res: any) => {
-  return app(req, res);
+export default {
+  async fetch(request: Request): Promise<Response> {
+    return (handler as any).fetch(request);
+  }
 };
-
-export default handler;
