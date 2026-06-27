@@ -13,11 +13,21 @@ function error(message: string, status = 500, extra?: any) {
 }
 
 function parseUrl(url: string) {
-  const u = new URL(url);
-  const path = u.pathname.replace(/^\/api\/?/, '/').replace(/\/+$/, '') || '/';
+  let pathname: string;
+  let searchParams: URLSearchParams;
+  try {
+    const u = new URL(url);
+    pathname = u.pathname;
+    searchParams = u.searchParams;
+  } catch {
+    const idx = url.indexOf('?');
+    pathname = idx >= 0 ? url.slice(0, idx) : url;
+    searchParams = new URLSearchParams(idx >= 0 ? url.slice(idx + 1) : '');
+  }
+  const path = pathname.replace(/^\/api\/?/, '/').replace(/\/+$/, '') || '/';
   const params: Record<string, string> = {};
-  u.searchParams.forEach((v, k) => { params[k] = v; });
-  return { path, params, pathname: u.pathname };
+  searchParams.forEach((v, k) => { params[k] = v; });
+  return { path, params, pathname };
 }
 
 function getSegment(path: string, index: number): string | undefined {
