@@ -11,7 +11,7 @@ async function loadDeps() {
       if (!pool) {
         const connStr = process.env.SUPABASE_URL || process.env.DATABASE_URL;
         if (!connStr) throw new Error('DATABASE_URL required');
-        pool = new Pool({ connectionString: connStr, ssl: { rejectUnauthorized: false }, max: 5, idleTimeoutMillis: 10000, connectionTimeoutMillis: 10000 });
+        pool = new Pool({ connectionString: connStr, ssl: { rejectUnauthorized: false }, max: 5, idleTimeoutMillis: 10000, connectionTimeoutMillis: 10000, options: '-c statement_timeout=30000', prepareThreshold: 0 });
       }
       return pool;
     };
