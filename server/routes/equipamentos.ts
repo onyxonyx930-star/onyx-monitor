@@ -4,6 +4,18 @@ import { getPrinterData, getSuppliesData, checkOnline } from '../snmp';
 
 const router = Router();
 
+function isPrivateIP(ip: string): boolean {
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4) return false;
+  return (
+    parts[0] === 10 ||
+    (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+    (parts[0] === 192 && parts[1] === 168) ||
+    parts[0] === 127 ||
+    parts[0] === 0
+  );
+}
+
 router.get('/stats', async (req: Request, res: Response) => {
   try {
     const db = getDb();
@@ -327,6 +339,68 @@ router.post('/:id/collect', async (req: Request, res: Response) => {
       });
     }
 
+    if (isPrivateIP(equipamento.ip)) {
+      const agentResult = await db.query(
+        `SELECT a.id, a.name, a.status, a.last_heartbeat
+         FROM agents a
+         WHERE a.id = $1 AND a.status = 'active'`,
+        [equipamento.agent_id]
+      );
+
+      const agent = agentResult.rows[0];
+
+      if (!agent) {
+        return res.status(400).json({
+          success: false,
+          data: {
+            reason: 'private_ip_no_agent',
+            ip: equipamento.ip,
+            hint: 'Para coletar dados deste equipamento, instale e configure um Onyx Agent na rede do cliente.',
+            agent_required: true,
+          },
+          message: 'Este equipamento está em rede interna (IP privado). Não é possível coletar diretamente da nuvem.',
+        });
+      }
+
+      const lastHeartbeat = agent.last_heartbeat ? new Date(agent.last_heartbeat).getTime() : 0;
+      const isOnline = lastHeartbeat > Date.now() - 10 * 60 * 1000;
+
+      if (!isOnline) {
+        return res.status(400).json({
+          success: false,
+          data: {
+            reason: 'agent_offline',
+            agent_name: agent.name,
+            last_heartbeat: agent.last_heartbeat,
+            hint: 'Verifique se o Agent está rodando na rede do cliente.',
+            agent_required: false,
+          },
+          message: `O Agent "${agent.name}" está configurado, mas parece estar offline.`,
+        });
+      }
+
+      await db.query(
+        `INSERT INTO agent_logs (agent_id, level, message, details)
+         VALUES ($1, 'info', $2, $3)`,
+        [
+          agent.id,
+          `Coleta solicitada para ${equipamento.ip} (${equipamento.modelo || equipamento.ip})`,
+          JSON.stringify({ equipamento_id: equipamento.id, requested_by: 'web_ui' }),
+        ]
+      );
+
+      return res.json({
+        success: true,
+        data: {
+          reason: 'routed_to_agent',
+          agent_id: agent.id,
+          agent_name: agent.name,
+          agent_online: true,
+        },
+        message: `Solicitação de coleta enviada ao Agent "${agent.name}". O Agent coletará os dados na próxima verificação.`,
+      });
+    }
+
     const printerData = await getPrinterData(equipamento.ip, equipamento.comunidade_snmp);
 
     const leituraResult = await db.query(
@@ -387,10 +461,21 @@ router.post('/:id/collect', async (req: Request, res: Response) => {
       message: 'Coleta realizada com sucesso',
     });
   } catch (error) {
+    const errMsg = error instanceof Error ? error.message : 'Unknown error';
+    const isTimeout = errMsg.includes('timeout') || errMsg.includes('Timed out');
+
     res.status(500).json({
       success: false,
-      message: 'Erro ao realizar coleta',
-      error: error instanceof Error ? error.message : 'Unknown error',
+      message: isTimeout
+        ? 'Tempo esgotado ao conectar com a impressora. Verifique se a impressora está ligada e acessível.'
+        : 'Erro ao realizar coleta SNMP',
+      details: {
+        reason: isTimeout ? 'snmp_timeout' : 'snmp_error',
+        error: errMsg,
+        hint: isTimeout
+          ? 'A impressora pode estar desligada, fora da rede, ou com o SNMP desabilitado.'
+          : 'Verifique o IP, community string e se a impressora suporta SNMP.',
+      },
     });
   }
 });

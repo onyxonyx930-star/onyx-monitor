@@ -50,6 +50,8 @@ export default function DetalhesEquipamento() {
   const [showEditForm, setShowEditForm] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [agentHint, setAgentHint] = useState<string | null>(null)
+  const [collectMsg, setCollectMsg] = useState<{ type: 'success' | 'info'; text: string } | null>(null)
 
   const fetchData = useCallback(async () => {
     if (!equipamentoId) return
@@ -82,12 +84,40 @@ export default function DetalhesEquipamento() {
   const handleCollect = async () => {
     try {
       setCollecting(true)
-      await collectEquipamento(equipamentoId)
-      await fetchData()
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'Erro ao coletar dados'
-      setError(message)
+      setError(null)
+      setAgentHint(null)
+      setCollectMsg(null)
+      const result: any = await collectEquipamento(equipamentoId)
+      if (result && result.reason) {
+        if (result.reason === 'routed_to_agent') {
+          setCollectMsg({ type: 'success', text: `Coleta enviada ao Agent "${result.agent_name}". O Agent coletará os dados automaticamente.` })
+        } else if (result.reason === 'private_ip_no_agent') {
+          setError('Este equipamento está em rede interna (IP privado). Não é possível coletar diretamente da nuvem.')
+          setAgentHint(result.hint || 'Para coletar dados deste equipamento, instale e configure um Onyx Agent na rede do cliente.')
+        } else if (result.reason === 'agent_offline') {
+          setError(`O Agent "${result.agent_name}" está configurado, mas parece estar offline.`)
+          setAgentHint(result.hint || 'Verifique se o Agent está rodando na rede do cliente.')
+        }
+      } else {
+        await fetchData()
+      }
+    } catch (err: any) {
+      const errorData = err?.data
+      const details = errorData?.data
+      if (details?.reason === 'private_ip_no_agent') {
+        setError('Este equipamento está em rede interna (IP privado). Não é possível coletar diretamente da nuvem.')
+        setAgentHint(details.hint || 'Instale e configure um Onyx Agent na rede do cliente para coletar dados deste equipamento.')
+      } else if (details?.reason === 'agent_offline') {
+        setError(`O Agent "${details.agent_name}" está configurado, mas parece estar offline.`)
+        setAgentHint(details.hint || 'Verifique se o Agent está rodando na rede do cliente.')
+      } else if (details?.reason === 'snmp_timeout') {
+        setError('Tempo esgotado ao conectar com a impressora.')
+        setAgentHint(details.hint || 'A impressora pode estar desligada, fora da rede, ou com o SNMP desabilitado.')
+      } else {
+        const message = err instanceof Error ? err.message : (errorData?.message || 'Erro ao coletar dados')
+        setError(message)
+        setAgentHint(null)
+      }
     } finally {
       setCollecting(false)
     }
@@ -289,9 +319,39 @@ export default function DetalhesEquipamento() {
       </div>
 
       {error && (
-        <div className="card border-accent-red/30 bg-accent-red/5 flex items-center gap-3">
-          <AlertCircle className="w-5 h-5 text-accent-red flex-shrink-0" />
-          <p className="text-accent-red text-sm">{error}</p>
+        <div className="card border-accent-red/30 bg-accent-red/5 space-y-3">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 text-accent-red flex-shrink-0" />
+            <p className="text-accent-red text-sm font-medium">{error}</p>
+          </div>
+          {agentHint && (
+            <div className="ml-8 p-3 bg-onyx-900/50 rounded-lg border border-onyx-700/50">
+              <p className="text-gray-300 text-sm">{agentHint}</p>
+              <div className="mt-3 flex items-center gap-3">
+                <a href="/agents" className="text-accent-blue text-sm hover:underline font-medium">
+                  Ver Agents
+                </a>
+                <span className="text-gray-600">|</span>
+                <a href="https://github.com/onyxonyx930-star/onyx-monitor/tree/main/agent" target="_blank" rel="noopener noreferrer" className="text-gray-400 text-sm hover:text-gray-300">
+                  Instalar Agent
+                </a>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {collectMsg && (
+        <div className={`card flex items-center gap-3 ${
+          collectMsg.type === 'success' ? 'border-green-500/30 bg-green-500/5' : 'border-accent-blue/30 bg-accent-blue/5'
+        }`}>
+          {collectMsg.type === 'success' ? (
+            <CheckCircle className="w-5 h-5 text-green-400 flex-shrink-0" />
+          ) : (
+            <Radio className="w-5 h-5 text-accent-blue flex-shrink-0" />
+          )}
+          <p className={`text-sm ${collectMsg.type === 'success' ? 'text-green-300' : 'text-accent-blue'}`}>{collectMsg.text}</p>
+          <button onClick={() => setCollectMsg(null)} className="ml-auto text-gray-500 hover:text-gray-300 text-xs">✕</button>
         </div>
       )}
 
