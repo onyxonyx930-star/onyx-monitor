@@ -68,7 +68,7 @@ function MensalTab() {
   const loadReport = async () => {
     setLoading(true)
     try {
-      const result = await api.getRelatorioConsumo('', `${mes}-01`, `${mes}-28`)
+      const result = await api.getRelatorioConsumo(`${mes}-01`, `${mes}-28`)
       setData(result)
     } catch {
       setData([])
@@ -173,7 +173,7 @@ function EquipamentoTab() {
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    api.getEquipamentos({ page: 1, per_page: 1000 } as never).then((res) => setEquipamentos(res.data)).catch(() => {})
+    api.getEquipamentos({ page: 1, per_page: 1000 }).then((res) => setEquipamentos(res.data)).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -314,7 +314,7 @@ function ConsumoTab() {
   const loadConsumo = async () => {
     setLoading(true)
     try {
-      const result = await api.getRelatorioConsumo('', dataInicio, dataFim)
+      const result = await api.getRelatorioConsumo(dataInicio, dataFim)
       setData(result)
     } catch {
       setData([])

@@ -2,15 +2,17 @@ import { lazy, Suspense, useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
 import Loading from './components/shared/Loading'
+import type { Equipamento } from './types'
 
 const Dashboard = lazy(() => import('./components/Dashboard/Dashboard'))
-const Equipamentos = lazy(() => import('./components/Equipamentos/ListaEquipamentos'))
+const ListaEquipamentos = lazy(() => import('./components/Equipamentos/ListaEquipamentos'))
 const EquipamentoDetalhes = lazy(() => import('./components/Equipamentos/DetalhesEquipamento'))
 const Suprimentos = lazy(() => import('./components/Suprimentos/Suprimentos'))
 const Alertas = lazy(() => import('./components/Alertas/Alertas'))
 const Relatorios = lazy(() => import('./components/Relatorios/Relatorios'))
 const Configuracoes = lazy(() => import('./components/Configuracoes'))
 const Login = lazy(() => import('./components/Login'))
+const FormEquipamento = lazy(() => import('./components/Equipamentos/FormEquipamento'))
 
 function PrivateRoute({ children, isAuthenticated }: { children: React.ReactNode; isAuthenticated: boolean }) {
   if (!isAuthenticated) {
@@ -22,6 +24,8 @@ function PrivateRoute({ children, isAuthenticated }: { children: React.ReactNode
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  const [showEquipamentoForm, setShowEquipamentoForm] = useState(false)
+  const [editingEquipamento, setEditingEquipamento] = useState<Equipamento | null>(null)
 
   useEffect(() => {
     const token = localStorage.getItem('onyx_token')
@@ -32,12 +36,12 @@ export default function App() {
   }, [])
 
   const handleLogin = () => {
-    localStorage.setItem('onyx_token', 'authenticated')
     setIsAuthenticated(true)
   }
 
   const handleLogout = () => {
     localStorage.removeItem('onyx_token')
+    localStorage.removeItem('onyx_user')
     setIsAuthenticated(false)
   }
 
@@ -65,7 +69,16 @@ export default function App() {
             element={
               <PrivateRoute isAuthenticated={isAuthenticated}>
                 <Layout onLogout={handleLogout}>
-                  <Equipamentos />
+                  <ListaEquipamentos
+                    onNovo={() => {
+                      setEditingEquipamento(null)
+                      setShowEquipamentoForm(true)
+                    }}
+                    onEditar={(eq) => {
+                      setEditingEquipamento(eq)
+                      setShowEquipamentoForm(true)
+                    }}
+                  />
                 </Layout>
               </PrivateRoute>
             }
@@ -122,6 +135,22 @@ export default function App() {
           />
         </Routes>
       </Suspense>
+
+      {showEquipamentoForm && (
+        <Suspense fallback={<Loading />}>
+          <FormEquipamento
+            equipamento={editingEquipamento}
+            onClose={() => {
+              setShowEquipamentoForm(false)
+              setEditingEquipamento(null)
+            }}
+            onSuccess={() => {
+              setShowEquipamentoForm(false)
+              setEditingEquipamento(null)
+            }}
+          />
+        </Suspense>
+      )}
     </BrowserRouter>
   )
 }

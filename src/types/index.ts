@@ -116,6 +116,8 @@ export type FiltrosEquipamento = {
   cliente?: string
   status?: string
   search?: string
+  page?: number
+  per_page?: number
 }
 
 export type FiltrosLeitura = {

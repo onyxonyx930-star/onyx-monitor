@@ -100,7 +100,7 @@ export default function Suprimentos() {
     try {
       const [supData, eqData] = await Promise.all([
         api.getSuprimentos(),
-        api.getEquipamentos({ page: 1, per_page: 1000 } as never),
+        api.getEquipamentos({ page: 1, per_page: 1000 }),
       ])
       setSuprimentos(supData)
       setEquipamentos(eqData.data)

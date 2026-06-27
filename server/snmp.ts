@@ -41,7 +41,7 @@ function createSession(ip: string, community: string): snmp.Session {
   });
 }
 
-function parseOidValue(varbind: snmp.VarBind): number | string {
+function parseOidValue(varbind: snmp.Varbind): number | string {
   if (varbind.type === snmp.ObjectType.OctetString) {
     return (varbind.value as Buffer).toString('utf-8').trim();
   }
@@ -83,7 +83,7 @@ export async function getPrinterData(ip: string, community: string): Promise<Pri
 
       const results: Record<string, any> = {};
       Object.keys(OIDS).forEach((key, index) => {
-        results[key] = parseOidValue(varbinds[index]);
+        results[key] = varbinds ? parseOidValue(varbinds[index]) : 0;
       });
 
       const printerData: PrinterData = {
@@ -127,9 +127,9 @@ export async function getSuppliesData(ip: string, community: string): Promise<Ar
       }
 
       const supplies: Array<{tipo: string, percentual: number}> = [];
-      const types = parseOidValue(varbinds[0]);
-      const levels = parseOidValue(varbinds[1]);
-      const maxCaps = parseOidValue(varbinds[2]);
+      const types = varbinds ? parseOidValue(varbinds[0]) : 0;
+      const levels = varbinds ? parseOidValue(varbinds[1]) : 0;
+      const maxCaps = varbinds ? parseOidValue(varbinds[2]) : 0;
 
       const typeMap: Record<number, string> = {
         3: 'preto',

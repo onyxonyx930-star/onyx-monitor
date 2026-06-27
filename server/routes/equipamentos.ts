@@ -9,7 +9,6 @@ router.get('/stats', (req: Request, res: Response) => {
     const db = getDb();
 
     const totalEquipamentos = (db.prepare('SELECT COUNT(*) as count FROM equipamentos').get() as any).count;
-    const equipamentosAtivos = (db.prepare("SELECT COUNT(*) as count FROM equipamentos WHERE status_monitoramento = 'ativo'").get() as any).count;
 
     const ultimaLeituraSubquery = `
       SELECT l.equipamento_id, l.status_online, l.data_leitura
@@ -29,21 +28,35 @@ router.get('/stats', (req: Request, res: Response) => {
       SELECT COUNT(*) as count FROM (${ultimaLeituraSubquery}) WHERE status_online = 0
     `).get() as any).count;
 
-    const alertasAtivos = (db.prepare('SELECT COUNT(*) as count FROM alertas WHERE resolvido = 0').get() as any).count;
+    const tonersBaixos = (db.prepare("SELECT COUNT(*) as count FROM suprimentos WHERE percentual <= 20").get() as any).count;
     const alertasCriticos = (db.prepare("SELECT COUNT(*) as count FROM alertas WHERE resolvido = 0 AND nivel = 'critical'").get() as any).count;
 
-    const totalLeituras = (db.prepare('SELECT COUNT(*) as count FROM leituras').get() as any).count;
+    const now = new Date();
+    const firstDayOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const totalPaginasMes = (db.prepare(`
+      SELECT COALESCE(SUM(contador_total), 0) as total FROM leituras WHERE data_leitura >= ?
+    `).get(firstDayOfMonth) as any).total;
+
+    const clientesVolume = db.prepare(`
+      SELECT e.cliente, SUM(l.contador_total) as paginas
+      FROM equipamentos e
+      INNER JOIN leituras l ON l.equipamento_id = e.id
+      WHERE l.data_leitura >= ?
+      GROUP BY e.cliente
+      ORDER BY paginas DESC
+      LIMIT 10
+    `).all(firstDayOfMonth);
 
     res.json({
       success: true,
       data: {
         total_equipamentos: totalEquipamentos,
-        equipamentos_ativos: equipamentosAtivos,
-        equipamentos_online: onlineCount,
-        equipamentos_offline: offlineCount,
-        alertas_ativos: alertasAtivos,
+        online: onlineCount,
+        offline: offlineCount,
+        toners_baixos: tonersBaixos,
         alertas_criticos: alertasCriticos,
-        total_leituras: totalLeituras,
+        total_paginas_mes: totalPaginasMes,
+        clientes_maior_volume: clientesVolume,
       },
     });
   } catch (error) {
@@ -58,8 +71,9 @@ router.get('/stats', (req: Request, res: Response) => {
 router.get('/', (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const { cliente, status, search } = req.query;
+    const { cliente, status, search, page = '1', per_page = '10' } = req.query;
 
+    let countQuery = 'SELECT COUNT(*) as count FROM equipamentos e WHERE 1=1';
     let query = `
       SELECT e.*,
         (SELECT COUNT(*) FROM alertas a WHERE a.equipamento_id = e.id AND a.resolvido = 0) as alertas_ativos
@@ -67,27 +81,42 @@ router.get('/', (req: Request, res: Response) => {
       WHERE 1=1
     `;
     const params: any[] = [];
+    const countParams: any[] = [];
 
     if (cliente) {
       query += ' AND e.cliente = ?';
+      countQuery += ' AND e.cliente = ?';
       params.push(cliente);
+      countParams.push(cliente);
     }
 
     if (status) {
       query += ' AND e.status_monitoramento = ?';
+      countQuery += ' AND e.status_monitoramento = ?';
       params.push(status);
+      countParams.push(status);
     }
 
     if (search) {
-      query += ' AND (e.cliente LIKE ? OR e.ip LIKE ? OR e.modelo LIKE ? OR e.numero_serie LIKE ?)';
+      const searchClause = ' AND (e.cliente LIKE ? OR e.ip LIKE ? OR e.modelo LIKE ? OR e.numero_serie LIKE ?)';
       const searchTerm = `%${search}%`;
+      query += searchClause;
+      countQuery += searchClause;
       params.push(searchTerm, searchTerm, searchTerm, searchTerm);
+      countParams.push(searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
-    query += ' ORDER BY e.created_at DESC';
+    const total = (db.prepare(countQuery).get(...countParams) as any).count;
+
+    const pageNum = Math.max(1, Number(page));
+    const perPageNum = Math.max(1, Math.min(100, Number(per_page)));
+    const offset = (pageNum - 1) * perPageNum;
+
+    query += ' ORDER BY e.created_at DESC LIMIT ? OFFSET ?';
+    params.push(perPageNum, offset);
 
     const equipamentos = db.prepare(query).all(...params);
-    res.json({ success: true, data: equipamentos });
+    res.json({ success: true, data: equipamentos, total });
   } catch (error) {
     res.status(500).json({
       success: false,

@@ -43,7 +43,7 @@ export default function Alertas() {
       loadAlertas(true)
     }, 30000)
     return () => clearInterval(interval)
-  }, [])
+  }, [filterTipo, filterNivel, filterResolvido])
 
   const loadAlertas = async (silent = false) => {
     if (!silent) setLoading(true)
@@ -187,7 +187,7 @@ export default function Alertas() {
       <div className="flex flex-wrap items-center gap-3">
         <select
           value={filterTipo}
-          onChange={(e) => { setFilterTipo(e.target.value); loadAlertas() }}
+          onChange={(e) => setFilterTipo(e.target.value)}
           className="bg-onyx-800 border border-onyx-700/50 text-gray-200 text-sm rounded-lg px-3 py-2 focus:ring-accent-blue focus:border-accent-blue"
         >
           {ALERT_TYPES.map((t) => (
@@ -197,7 +197,7 @@ export default function Alertas() {
 
         <select
           value={filterNivel}
-          onChange={(e) => { setFilterNivel(e.target.value); loadAlertas() }}
+          onChange={(e) => setFilterNivel(e.target.value)}
           className="bg-onyx-800 border border-onyx-700/50 text-gray-200 text-sm rounded-lg px-3 py-2 focus:ring-accent-blue focus:border-accent-blue"
         >
           {SEVERITY_OPTIONS.map((s) => (
@@ -210,7 +210,6 @@ export default function Alertas() {
           onChange={(e) => {
             const v = e.target.value
             setFilterResolvido(v === '' ? undefined : v === 'true')
-            loadAlertas()
           }}
           className="bg-onyx-800 border border-onyx-700/50 text-gray-200 text-sm rounded-lg px-3 py-2 focus:ring-accent-blue focus:border-accent-blue"
         >

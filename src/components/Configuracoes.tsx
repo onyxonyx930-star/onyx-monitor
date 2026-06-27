@@ -1,7 +1,29 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import type { Usuario } from '../types'
+import * as api from '../services/api'
 
 export default function Configuracoes() {
   const [activeTab, setActiveTab] = useState<'geral' | 'snmp' | 'coleta' | 'usuarios'>('geral')
+  const [usuarios, setUsuarios] = useState<Usuario[]>([])
+  const [loadingUsers, setLoadingUsers] = useState(false)
+
+  useEffect(() => {
+    if (activeTab === 'usuarios') {
+      loadUsuarios()
+    }
+  }, [activeTab])
+
+  const loadUsuarios = async () => {
+    setLoadingUsers(true)
+    try {
+      const data = await api.listUsuarios()
+      setUsuarios(data)
+    } catch {
+      setUsuarios([])
+    } finally {
+      setLoadingUsers(false)
+    }
+  }
 
   const tabs = [
     { id: 'geral' as const, label: 'Geral', icon: '⚙️' },
@@ -9,6 +31,15 @@ export default function Configuracoes() {
     { id: 'coleta' as const, label: 'Coleta Automática', icon: '🔄' },
     { id: 'usuarios' as const, label: 'Usuários', icon: '👥' },
   ]
+
+  function getRoleBadge(role: string) {
+    switch (role) {
+      case 'admin': return <span className="badge badge-blue">Admin</span>
+      case 'operador': return <span className="badge badge-green">Operador</span>
+      case 'cliente': return <span className="badge badge-yellow">Cliente</span>
+      default: return <span className="badge">{role}</span>
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -132,30 +163,48 @@ export default function Configuracoes() {
             <h3 className="text-lg font-semibold text-white">Usuários</h3>
             <button className="btn-primary">+ Novo Usuário</button>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-onyx-700/50">
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">Nome</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">Email</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">Perfil</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">Status</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">Ações</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr className="table-row">
-                  <td className="py-3 px-4 text-sm text-gray-200">Administrador</td>
-                  <td className="py-3 px-4 text-sm text-gray-400">admin@onyx.com</td>
-                  <td className="py-3 px-4"><span className="badge badge-blue">Admin</span></td>
-                  <td className="py-3 px-4"><span className="badge badge-green">Ativo</span></td>
-                  <td className="py-3 px-4">
-                    <button className="text-sm text-accent-blue hover:text-blue-400">Editar</button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          {loadingUsers ? (
+            <div className="space-y-3">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="h-12 bg-onyx-700/50 rounded-lg animate-pulse" />
+              ))}
+            </div>
+          ) : usuarios.length === 0 ? (
+            <p className="text-gray-400 text-sm text-center py-8">Nenhum usuário encontrado</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-onyx-700/50">
+                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">Nome</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">Email</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">Perfil</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">Status</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-400">Ações</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {usuarios.map((u) => (
+                    <tr key={u.id} className="table-row">
+                      <td className="py-3 px-4 text-sm text-gray-200">{u.nome}</td>
+                      <td className="py-3 px-4 text-sm text-gray-400">{u.email}</td>
+                      <td className="py-3 px-4">{getRoleBadge(u.role)}</td>
+                      <td className="py-3 px-4">
+                        {u.ativo ? (
+                          <span className="badge badge-green">Ativo</span>
+                        ) : (
+                          <span className="badge badge-red">Inativo</span>
+                        )}
+                      </td>
+                      <td className="py-3 px-4">
+                        <button className="text-sm text-accent-blue hover:text-blue-400">Editar</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </div>

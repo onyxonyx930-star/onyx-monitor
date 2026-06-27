@@ -1,5 +1,6 @@
-import { useState, Fragment } from 'react'
+import { useState, Fragment, useMemo } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
+import type { Usuario } from '../types'
 
 interface LayoutProps {
   children: React.ReactNode
@@ -27,6 +28,19 @@ const pageTitles: Record<string, string> = {
 export default function Layout({ children, onLogout }: LayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const location = useLocation()
+
+  const user = useMemo(() => {
+    try {
+      const raw = localStorage.getItem('onyx_user')
+      return raw ? JSON.parse(raw) as Usuario : null
+    } catch {
+      return null
+    }
+  }, [])
+
+  const userName = user?.nome || 'Admin'
+  const userEmail = user?.email || 'admin@onyx.com'
+  const initials = userName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()
 
   const getPageTitle = () => {
     if (location.pathname.startsWith('/equipamentos/')) {
@@ -86,11 +100,11 @@ export default function Layout({ children, onLogout }: LayoutProps) {
         <div className="px-4 py-4 border-t border-onyx-700/50">
           <div className="flex items-center gap-3 mb-3">
             <div className="w-9 h-9 rounded-full bg-onyx-700 flex items-center justify-center">
-              <span className="text-sm font-medium text-gray-300">AD</span>
+              <span className="text-sm font-medium text-gray-300">{initials}</span>
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-gray-200 truncate">Admin</p>
-              <p className="text-xs text-gray-500 truncate">admin@onyx.com</p>
+              <p className="text-sm font-medium text-gray-200 truncate">{userName}</p>
+              <p className="text-xs text-gray-500 truncate">{userEmail}</p>
             </div>
           </div>
           <button
@@ -135,9 +149,9 @@ export default function Layout({ children, onLogout }: LayoutProps) {
 
             <div className="hidden sm:flex items-center gap-3 pl-4 border-l border-onyx-700/50">
               <div className="w-8 h-8 rounded-full bg-gradient-to-br from-accent-blue to-blue-400 flex items-center justify-center">
-                <span className="text-xs font-bold text-white">AD</span>
+                <span className="text-xs font-bold text-white">{initials}</span>
               </div>
-              <span className="text-sm font-medium text-gray-300">Admin</span>
+              <span className="text-sm font-medium text-gray-300">{userName}</span>
             </div>
           </div>
         </header>
