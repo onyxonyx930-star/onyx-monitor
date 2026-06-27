@@ -154,6 +154,47 @@ export async function initDatabase(): Promise<Pool> {
     `);
 
     await client.query(`
+      CREATE TABLE IF NOT EXISTS auditoria_impressoes (
+        id SERIAL PRIMARY KEY,
+        equipamento_id INTEGER REFERENCES equipamentos(id) ON DELETE SET NULL,
+        cliente TEXT,
+        usuario TEXT,
+        computador TEXT,
+        documento TEXT,
+        data_impressao TEXT NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC')::text,
+        hora_impressao TEXT,
+        total_paginas INTEGER DEFAULT 1,
+        colorida INTEGER DEFAULT 0,
+        duplex INTEGER DEFAULT 0,
+        tamanho_papel TEXT DEFAULT 'A4',
+        status_impressao TEXT NOT NULL DEFAULT 'concluida' CHECK(status_impressao IN ('concluida','cancelada','erro','pendente')),
+        fonte TEXT NOT NULL DEFAULT 'snmp' CHECK(fonte IN ('snmp','spooler','api','manual','agent')),
+        ip_equipamento TEXT,
+        numero_serie TEXT,
+        modelo_equip TEXT,
+        dados_extras JSONB DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC')::text
+      );
+
+      CREATE TABLE IF NOT EXISTS auditoria_config (
+        id SERIAL PRIMARY KEY,
+        tipo_integracao TEXT NOT NULL CHECK(tipo_integracao IN ('snmp','spooler','api_fabricante','accounting')),
+        ativo INTEGER DEFAULT 1,
+        config JSONB DEFAULT '{}',
+        equipamento_id INTEGER REFERENCES equipamentos(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC')::text,
+        updated_at TEXT NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC')::text
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_auditoria_equipamento ON auditoria_impressoes(equipamento_id);
+      CREATE INDEX IF NOT EXISTS idx_auditoria_cliente ON auditoria_impressoes(cliente);
+      CREATE INDEX IF NOT EXISTS idx_auditoria_usuario ON auditoria_impressoes(usuario);
+      CREATE INDEX IF NOT EXISTS idx_auditoria_data ON auditoria_impressoes(data_impressao);
+      CREATE INDEX IF NOT EXISTS idx_auditoria_documento ON auditoria_impressoes(documento);
+      CREATE INDEX IF NOT EXISTS idx_auditoria_config_equip ON auditoria_config(equipamento_id);
+    `);
+
+    await client.query(`
       INSERT INTO usuarios (nome, email, senha_hash, role, ativo)
       SELECT 'Administrador', 'admin@onyx.com', $1, 'admin', 1
       WHERE NOT EXISTS (SELECT 1 FROM usuarios WHERE email = 'admin@onyx.com')

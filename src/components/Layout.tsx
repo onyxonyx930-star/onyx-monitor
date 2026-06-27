@@ -14,6 +14,7 @@ const navigation = [
   { name: 'Agents', href: '/agents', icon: '🤖' },
   { name: 'Suprimentos', href: '/suprimentos', icon: '📦' },
   { name: 'Alertas', href: '/alertas', icon: '🔔' },
+  { name: 'Auditoria', href: '/auditoria', icon: '📝' },
   { name: 'Relatórios', href: '/relatorios', icon: '📋' },
   { name: 'Configurações', href: '/configuracoes', icon: '⚙️' },
 ]
@@ -24,6 +25,7 @@ const pageTitles: Record<string, string> = {
   '/agents': 'Agents',
   '/suprimentos': 'Suprimentos',
   '/alertas': 'Alertas',
+  '/auditoria': 'Auditoria de Impressão',
   '/relatorios': 'Relatórios',
   '/configuracoes': 'Configurações',
 }

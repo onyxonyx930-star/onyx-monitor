@@ -17,6 +17,7 @@ const FormEquipamento = lazy(() => import('./components/Equipamentos/FormEquipam
 const ListaAgents = lazy(() => import('./components/Agents/ListaAgents'))
 const DetalhesAgent = lazy(() => import('./components/Agents/DetalhesAgent'))
 const FormAgent = lazy(() => import('./components/Agents/FormAgent'))
+const Auditoria = lazy(() => import('./components/Auditoria/Auditoria'))
 
 function PrivateRoute({ children, isAuthenticated }: { children: React.ReactNode; isAuthenticated: boolean }) {
   if (!isAuthenticated) {
@@ -182,6 +183,16 @@ export default function App() {
               <PrivateRoute isAuthenticated={isAuthenticated}>
                 <Layout onLogout={handleLogout}>
                   <DetalhesAgent />
+                </Layout>
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="/auditoria"
+            element={
+              <PrivateRoute isAuthenticated={isAuthenticated}>
+                <Layout onLogout={handleLogout}>
+                  <Auditoria />
                 </Layout>
               </PrivateRoute>
             }

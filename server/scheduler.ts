@@ -279,7 +279,7 @@ function getIntervalCron(interval: string): string {
   }
 }
 
-const activeJobs: Map<number, cron.ScheduledTask> = new Map();
+const activeJobs: Map<number, { stop: () => void }> = new Map();
 
 export function scheduleEquipment(equipamentoId: number, interval: string): void {
   if (activeJobs.has(equipamentoId)) {

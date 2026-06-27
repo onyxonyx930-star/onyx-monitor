@@ -9,6 +9,7 @@ import alertasRouter from './routes/alertas';
 import relatoriosRouter from './routes/relatorios';
 import authRouter from './routes/auth';
 import agentsRouter from './routes/agents';
+import auditoriaRouter from './routes/auditoria';
 import { authMiddleware } from './routes/auth';
 
 const app = express();
@@ -29,6 +30,7 @@ app.use('/api/leituras', authMiddleware, leiturasRouter);
 app.use('/api/suprimentos', authMiddleware, suprimentosRouter);
 app.use('/api/alertas', authMiddleware, alertasRouter);
 app.use('/api/relatorios', authMiddleware, relatoriosRouter);
+app.use('/api/auditoria', authMiddleware, auditoriaRouter);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

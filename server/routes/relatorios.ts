@@ -262,7 +262,6 @@ router.get('/consumo', async (req: Request, res: Response) => {
 
 router.get('/export/excel', async (req: Request, res: Response) => {
   try {
-    const XLSX = await import('xlsx');
     const db = getDb();
     const { cliente, data_inicio, data_fim } = req.query;
 
@@ -310,16 +309,29 @@ router.get('/export/excel', async (req: Request, res: Response) => {
     query += ' ORDER BY e.cliente, l.data_leitura DESC';
 
     const dataResult = await db.query(query, params);
+    const rows = dataResult.rows;
 
-    const worksheet = XLSX.utils.json_to_sheet(dataResult.rows);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Relatório');
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Nenhum dado encontrado para exportação' });
+    }
 
-    const excelBuffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    const headers = Object.keys(rows[0]);
+    const csvRows = [
+      '\uFEFF' + headers.join(';'),
+      ...rows.map((row: any) => headers.map((h) => {
+        const val = row[h];
+        if (val === null || val === undefined) return '';
+        const str = String(val);
+        return str.includes(';') || str.includes('"') || str.includes('\n')
+          ? `"${str.replace(/"/g, '""')}"` : str;
+      }).join(';'))
+    ];
 
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', 'attachment; filename=relatorio_onyx.xlsx');
-    res.send(excelBuffer);
+    const csvBuffer = Buffer.from(csvRows.join('\n'), 'utf-8');
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename=relatorio_onyx.csv');
+    res.send(csvBuffer);
   } catch (error) {
     res.status(500).json({
       success: false,

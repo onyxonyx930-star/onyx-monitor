@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Onyx Monitor Agent</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; }
+    .card { background: #1e293b; border-radius: 12px; border: 1px solid #334155; }
+    .status-online { color: #10b981; }
+    .status-offline { color: #ef4444; }
+    .log-entry { font-family: 'Menlo', 'Monaco', monospace; font-size: 12px; }
+    .log-info { color: #3b82f6; }
+    .log-warn { color: #f59e0b; }
+    .log-error { color: #ef4444; }
+    .log-debug { color: #8b5cf6; }
+  </style>
+</head>
+<body class="min-h-screen p-6">
+  <div class="max-w-4xl mx-auto">
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-8">
+      <div>
+        <h1 class="text-3xl font-bold text-white">Onyx Monitor Agent</h1>
+        <p class="text-slate-400">Painel de controle local</p>
+      </div>
+      <div id="status-badge" class="px-4 py-2 rounded-lg text-sm font-medium">
+        Verificando...
+      </div>
+    </div>
+
+    <!-- Status Card -->
+    <div class="card p-6 mb-6">
+      <h2 class="text-xl font-semibold mb-4">Status do Agente</h2>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div>
+          <div class="text-slate-400 text-sm">Nome</div>
+          <div id="agent-name" class="font-medium">-</div>
+        </div>
+        <div>
+          <div class="text-slate-400 text-sm">Versão</div>
+          <div id="agent-version" class="font-medium">-</div>
+        </div>
+        <div>
+          <div class="text-slate-400 text-sm">Uptime</div>
+          <div id="agent-uptime" class="font-medium">-</div>
+        </div>
+        <div>
+          <div class="text-slate-400 text-sm">Intervalo</div>
+          <div id="agent-interval" class="font-medium">-</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <button onclick="collectNow()" class="card p-4 text-center hover:bg-slate-700 transition cursor-pointer">
+        <div class="text-2xl mb-2">📡</div>
+        <div class="font-medium">Coletar Agora</div>
+      </button>
+      <button onclick="refreshPrinters()" class="card p-4 text-center hover:bg-slate-700 transition cursor-pointer">
+        <div class="text-2xl mb-2">🔄</div>
+        <div class="font-medium">Atualizar Lista</div>
+      </button>
+      <button onclick="showDiscoverModal()" class="card p-4 text-center hover:bg-slate-700 transition cursor-pointer">
+        <div class="text-2xl mb-2">🔍</div>
+        <div class="font-medium">Descobrir</div>
+      </button>
+      <button onclick="refreshStatus()" class="card p-4 text-center hover:bg-slate-700 transition cursor-pointer">
+        <div class="text-2xl mb-2">📊</div>
+        <div class="font-medium">Atualizar Status</div>
+      </button>
+    </div>
+
+    <!-- Logs -->
+    <div class="card p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-xl font-semibold">Logs</h2>
+        <button onclick="refreshLogs()" class="text-blue-400 hover:text-blue-300 text-sm">
+          Atualizar
+        </button>
+      </div>
+      <div id="logs-container" class="bg-slate-900 rounded-lg p-4 h-64 overflow-y-auto font-mono text-sm">
+        <div class="text-slate-500">Carregando logs...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Discover Modal -->
+  <div id="discover-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center">
+    <div class="card p-6 w-full max-w-md">
+      <h3 class="text-lg font-semibold mb-4">Descobrir Impressoras</h3>
+      <p class="text-slate-400 text-sm mb-4">Digite a sub-rede para escanear (ex: 192.168.1.0)</p>
+      <input
+        type="text"
+        id="discover-subnet"
+        placeholder="192.168.1.0"
+        class="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg mb-4 focus:outline-none focus:border-blue-500"
+      />
+      <div class="flex gap-2">
+        <button onclick="startDiscovery()" class="flex-1 bg-blue-600 hover:bg-blue-700 py-2 rounded-lg transition">
+          Iniciar
+        </button>
+        <button onclick="hideDiscoverModal()" class="flex-1 bg-slate-600 hover:bg-slate-500 py-2 rounded-lg transition">
+          Cancelar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    async function fetchStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        document.getElementById('agent-name').textContent = data.name || '-';
+        document.getElementById('agent-version').textContent = data.version || '-';
+        document.getElementById('agent-uptime').textContent = formatUptime(data.uptime);
+        document.getElementById('agent-interval').textContent = data.scheduler?.interval || '-';
+        
+        const badge = document.getElementById('status-badge');
+        if (data.status === 'configured') {
+          badge.className = 'px-4 py-2 rounded-lg text-sm font-medium bg-green-900/50 text-green-400 border border-green-700';
+          badge.textContent = 'Online';
+        } else {
+          badge.className = 'px-4 py-2 rounded-lg text-sm font-medium bg-yellow-900/50 text-yellow-400 border border-yellow-700';
+          badge.textContent = 'Não Configurado';
+        }
+      } catch (e) {
+        console.error('Erro ao buscar status:', e);
+      }
+    }
+
+    function formatUptime(seconds) {
+      if (!seconds) return '-';
+      const d = Math.floor(seconds / 86400);
+      const h = Math.floor((seconds % 86400) / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      if (d > 0) return `${d}d ${h}h`;
+      if (h > 0) return `${h}h ${m}m`;
+      return `${m}m`;
+    }
+
+    async function refreshLogs() {
+      try {
+        const res = await fetch('/api/logs?limit=50');
+        const logs = await res.json();
+        const container = document.getElementById('logs-container');
+        
+        if (logs.length === 0) {
+          container.innerHTML = '<div class="text-slate-500">Nenhum log disponível</div>';
+          return;
+        }
+
+        container.innerHTML = logs.reverse().map(log => 
+          `<div class="log-entry log-${log.level}">[${log.timestamp}] ${log.level.toUpperCase()}: ${log.message}</div>`
+        ).join('');
+      } catch (e) {
+        console.error('Erro ao buscar logs:', e);
+      }
+    }
+
+    async function collectNow() {
+      try {
+        await fetch('/api/collect', { method: 'POST' });
+        setTimeout(refreshLogs, 1000);
+      } catch (e) {
+        alert('Erro ao iniciar coleta');
+      }
+    }
+
+    async function refreshPrinters() {
+      try {
+        await fetch('/api/refresh', { method: 'POST' });
+        alert('Lista de impressoras atualizada!');
+      } catch (e) {
+        alert('Erro ao atualizar lista');
+      }
+    }
+
+    function showDiscoverModal() {
+      document.getElementById('discover-modal').classList.remove('hidden');
+      document.getElementById('discover-modal').classList.add('flex');
+    }
+
+    function hideDiscoverModal() {
+      document.getElementById('discover-modal').classList.add('hidden');
+      document.getElementById('discover-modal').classList.remove('flex');
+    }
+
+    async function startDiscovery() {
+      const subnet = document.getElementById('discover-subnet').value;
+      if (!subnet) {
+        alert('Digite uma sub-rede');
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/discover', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subnet })
+        });
+        const data = await res.json();
+        
+        if (data.success) {
+          alert(`Descobertas ${data.data.length} impressoras!`);
+          hideDiscoverModal();
+        } else {
+          alert('Erro: ' + data.message);
+        }
+      } catch (e) {
+        alert('Erro ao executar descoberta');
+      }
+    }
+
+    function refreshStatus() {
+      fetchStatus();
+      refreshLogs();
+    }
+
+    // Auto-refresh
+    setInterval(fetchStatus, 30000);
+    setInterval(refreshLogs, 10000);
+
+    // Initial load
+    fetchStatus();
+    refreshLogs();
+  </script>
+</body>
+</html>

@@ -293,4 +293,49 @@ export async function getAgentLogs(agentId: number, level?: string): Promise<imp
   return request<import('../types').AgentLog[]>(`/agents/${agentId}/logs${params}`)
 }
 
+// Auditoria de Impressão
+export async function getAuditoria(filtros?: import('../types/auditoria').FiltrosAuditoria): Promise<{ data: import('../types/auditoria').AuditoriaImpressao[]; total: number }> {
+  const params = buildQueryParams(filtros as Record<string, string | number | boolean | undefined>)
+  return request(`/auditoria${params}`)
+}
+
+export async function getAuditoriaStats(dataInicio?: string, dataFim?: string): Promise<import('../types/auditoria').AuditoriaStats> {
+  const params = buildQueryParams({ data_inicio: dataInicio, data_fim: dataFim })
+  return request(`/auditoria/stats${params}`)
+}
+
+export async function createAuditoria(record: Partial<import('../types/auditoria').AuditoriaImpressao>): Promise<import('../types/auditoria').AuditoriaImpressao> {
+  return request('/auditoria', { method: 'POST', body: JSON.stringify(record) })
+}
+
+export async function createAuditoriaBatch(records: Partial<import('../types/auditoria').AuditoriaImpressao>[]): Promise<{ inserted: number; total: number }> {
+  return request('/auditoria/batch', { method: 'POST', body: JSON.stringify({ records }) })
+}
+
+export async function deleteAuditoria(id: number): Promise<void> {
+  await request(`/auditoria/${id}`, { method: 'DELETE' })
+}
+
+export async function exportAuditoriaCsv(filtros?: Record<string, string>): Promise<Blob> {
+  const query = buildQueryParams(filtros as Record<string, string | number | boolean | undefined>)
+  const token = getToken()
+  const response = await fetch(`${BASE_URL}/auditoria/export/csv${query}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!response.ok) throw new ApiError(response.status, 'Erro ao exportar CSV')
+  return response.blob()
+}
+
+export async function getAuditoriaConfig(): Promise<import('../types/auditoria').AuditoriaConfig[]> {
+  return request('/auditoria/config')
+}
+
+export async function createAuditoriaConfig(config: Partial<import('../types/auditoria').AuditoriaConfig>): Promise<import('../types/auditoria').AuditoriaConfig> {
+  return request('/auditoria/config', { method: 'POST', body: JSON.stringify(config) })
+}
+
+export async function deleteAuditoriaConfig(id: number): Promise<void> {
+  await request(`/auditoria/config/${id}`, { method: 'DELETE' })
+}
+
 export { ApiError, getToken, removeToken }
