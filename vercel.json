@@ -6,14 +6,12 @@
   "framework": null,
   "functions": {
     "api/index.ts": {
-      "includeFiles": "server/**",
       "maxDuration": 30
     },
     "api/health.ts": {
       "maxDuration": 5
     },
     "api/cron/collect.ts": {
-      "includeFiles": "server/**",
       "maxDuration": 30
     }
   },
