@@ -1,21 +1,12 @@
 {
   "version": 2,
   "name": "onyx-monitor",
-  "buildCommand": "npx vite build",
   "outputDirectory": "dist",
-  "framework": "vite",
+  "framework": null,
   "installCommand": "npm install",
   "rewrites": [
     {
-      "source": "/api/cron/collect",
-      "destination": "/api/cron/collect"
-    },
-    {
-      "source": "/api/(.*)",
-      "destination": "/api"
-    },
-    {
-      "source": "/((?!assets/).*)",
+      "source": "/((?!assets/|api/).*)",
       "destination": "/index.html"
     }
   ],
