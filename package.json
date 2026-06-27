@@ -13,7 +13,7 @@
     "db:init": "tsx server/database.ts"
   },
   "dependencies": {
-    "better-sqlite3": "^11.0.0",
+    "pg": "^8.12.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.0",
@@ -33,7 +33,7 @@
     "zustand": "^4.5.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.8",
+    "@types/pg": "^8.11.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",

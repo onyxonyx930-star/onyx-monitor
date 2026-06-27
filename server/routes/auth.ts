@@ -50,7 +50,7 @@ export function adminMiddleware(req: Request, res: Response, next: NextFunction)
   next();
 }
 
-router.post('/login', (req: Request, res: Response) => {
+router.post('/login', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { email, senha } = req.body;
@@ -62,7 +62,8 @@ router.post('/login', (req: Request, res: Response) => {
       });
     }
 
-    const user = db.prepare('SELECT * FROM usuarios WHERE email = ? AND ativo = 1').get(email) as any;
+    const result = await db.query('SELECT * FROM usuarios WHERE email = $1 AND ativo = 1', [email]);
+    const user = result.rows[0];
 
     if (!user) {
       return res.status(401).json({
@@ -106,12 +107,16 @@ router.post('/login', (req: Request, res: Response) => {
   }
 });
 
-router.get('/me', authMiddleware, (req: Request, res: Response) => {
+router.get('/me', authMiddleware, async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const userId = (req as any).user.userId;
 
-    const user = db.prepare('SELECT id, nome, email, role, cliente_id, ativo, created_at FROM usuarios WHERE id = ?').get(userId);
+    const result = await db.query(
+      'SELECT id, nome, email, role, cliente_id, ativo, created_at FROM usuarios WHERE id = $1',
+      [userId]
+    );
+    const user = result.rows[0];
 
     if (!user) {
       return res.status(404).json({
@@ -130,7 +135,7 @@ router.get('/me', authMiddleware, (req: Request, res: Response) => {
   }
 });
 
-router.post('/usuarios', authMiddleware, adminMiddleware, (req: Request, res: Response) => {
+router.post('/usuarios', authMiddleware, adminMiddleware, async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { nome, email, senha, role, cliente_id } = req.body;
@@ -142,32 +147,24 @@ router.post('/usuarios', authMiddleware, adminMiddleware, (req: Request, res: Re
       });
     }
 
-    const existing = db.prepare('SELECT id FROM usuarios WHERE email = ?').get(email);
-    if (existing) {
+    const existing = await db.query('SELECT id FROM usuarios WHERE email = $1', [email]);
+    if (existing.rows[0]) {
       return res.status(409).json({
         success: false,
         message: 'Já existe um usuário com este email',
       });
     }
 
-    const result = db.prepare(`
-      INSERT INTO usuarios (nome, email, senha_hash, role, cliente_id, ativo)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      nome,
-      email,
-      hashPassword(senha),
-      role || 'cliente',
-      cliente_id || null,
-      1,
+    const result = await db.query(
+      `INSERT INTO usuarios (nome, email, senha_hash, role, cliente_id, ativo)
+       VALUES ($1, $2, $3, $4, $5, 1)
+       RETURNING id, nome, email, role, cliente_id, ativo, created_at`,
+      [nome, email, hashPassword(senha), role || 'cliente', cliente_id || null]
     );
-
-    const user = db.prepare('SELECT id, nome, email, role, cliente_id, ativo, created_at FROM usuarios WHERE id = ?')
-      .get(result.lastInsertRowid);
 
     res.status(201).json({
       success: true,
-      data: user,
+      data: result.rows[0],
       message: 'Usuário criado com sucesso',
     });
   } catch (error) {
@@ -179,13 +176,13 @@ router.post('/usuarios', authMiddleware, adminMiddleware, (req: Request, res: Re
   }
 });
 
-router.get('/usuarios', authMiddleware, adminMiddleware, (req: Request, res: Response) => {
+router.get('/usuarios', authMiddleware, adminMiddleware, async (req: Request, res: Response) => {
   try {
     const db = getDb();
 
-    const users = db.prepare('SELECT id, nome, email, role, cliente_id, ativo, created_at FROM usuarios ORDER BY created_at DESC').all();
+    const result = await db.query('SELECT id, nome, email, role, cliente_id, ativo, created_at FROM usuarios ORDER BY created_at DESC');
 
-    res.json({ success: true, data: users });
+    res.json({ success: true, data: result.rows });
   } catch (error) {
     res.status(500).json({
       success: false,

@@ -3,7 +3,7 @@ import { getDb } from '../database';
 
 const router = Router();
 
-router.get('/mensal', (req: Request, res: Response) => {
+router.get('/mensal', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { mes, ano, cliente } = req.query;
@@ -29,44 +29,48 @@ router.get('/mensal', (req: Request, res: Response) => {
         AVG(l.toner_amarelo) as avg_toner_amarelo
       FROM leituras l
       LEFT JOIN equipamentos e ON l.equipamento_id = e.id
-      WHERE l.data_leitura >= ? AND l.data_leitura <= ?
+      WHERE l.data_leitura >= $1 AND l.data_leitura <= $2
     `;
     const params: any[] = [startDate, endDate];
+    let paramIndex = 3;
 
     if (cliente) {
-      query += ' AND e.cliente = ?';
+      query += ` AND e.cliente = $${paramIndex}`;
       params.push(cliente);
+      paramIndex++;
     }
 
     query += ' GROUP BY e.id ORDER BY e.cliente, e.modelo';
 
-    const report = db.prepare(query).all(...params);
+    const reportResult = await db.query(query, params);
 
-    const summaryQuery = `
+    let summaryQuery = `
       SELECT
         e.cliente,
         COUNT(DISTINCT e.id) as equipamentos,
         SUM(CASE WHEN l.status_online = 1 THEN 1 ELSE 0 END) as leituras_online,
         SUM(CASE WHEN l.status_online = 0 THEN 1 ELSE 0 END) as leituras_offline
       FROM equipamentos e
-      LEFT JOIN leituras l ON l.equipamento_id = e.id AND l.data_leitura >= ? AND l.data_leitura <= ?
+      LEFT JOIN leituras l ON l.equipamento_id = e.id AND l.data_leitura >= $1 AND l.data_leitura <= $2
       WHERE 1=1
     `;
     const summaryParams: any[] = [startDate, endDate];
+    let summaryParamIndex = 3;
 
     if (cliente) {
-      query += ' AND e.cliente = ?';
+      summaryQuery += ` AND e.cliente = $${summaryParamIndex}`;
       summaryParams.push(cliente);
+      summaryParamIndex++;
     }
 
-    const summary = db.prepare(summaryQuery).all(...summaryParams);
+    const summaryResult = await db.query(summaryQuery, summaryParams);
 
     res.json({
       success: true,
       data: {
         periodo: { mes: currentMonth, ano: currentYear, startDate, endDate },
-        detalhes: report,
-        resumo_por_cliente: summary,
+        detalhes: reportResult.rows,
+        resumo_por_cliente: summaryResult.rows,
       },
     });
   } catch (error) {
@@ -78,13 +82,14 @@ router.get('/mensal', (req: Request, res: Response) => {
   }
 });
 
-router.get('/equipamento/:id', (req: Request, res: Response) => {
+router.get('/equipamento/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { id } = req.params;
     const { data_inicio, data_fim } = req.query;
 
-    const equipamento = db.prepare('SELECT * FROM equipamentos WHERE id = ?').get(id);
+    const equipResult = await db.query('SELECT * FROM equipamentos WHERE id = $1', [id]);
+    const equipamento = equipResult.rows[0];
 
     if (!equipamento) {
       return res.status(404).json({
@@ -93,24 +98,27 @@ router.get('/equipamento/:id', (req: Request, res: Response) => {
       });
     }
 
-    let query = 'SELECT * FROM leituras WHERE equipamento_id = ?';
+    let query = 'SELECT * FROM leituras WHERE equipamento_id = $1';
     const params: any[] = [id];
+    let paramIndex = 2;
 
     if (data_inicio) {
-      query += ' AND data_leitura >= ?';
+      query += ` AND data_leitura >= $${paramIndex}`;
       params.push(data_inicio);
+      paramIndex++;
     }
 
     if (data_fim) {
-      query += ' AND data_leitura <= ?';
+      query += ` AND data_leitura <= $${paramIndex}`;
       params.push(data_fim);
+      paramIndex++;
     }
 
     query += ' ORDER BY data_leitura ASC';
 
-    const leituras = db.prepare(query).all(...params);
+    const leiturasResult = await db.query(query, params);
 
-    const stats = db.prepare(`
+    const statsResult = await db.query(`
       SELECT
         MIN(contador_total) as counter_start,
         MAX(contador_total) as counter_end,
@@ -121,27 +129,27 @@ router.get('/equipamento/:id', (req: Request, res: Response) => {
         SUM(CASE WHEN status_online = 1 THEN 1 ELSE 0 END) as online_count,
         SUM(CASE WHEN status_online = 0 THEN 1 ELSE 0 END) as offline_count
       FROM leituras
-      WHERE equipamento_id = ?
-    `).get(id);
+      WHERE equipamento_id = $1
+    `, [id]);
 
-    const suprimentos = db.prepare('SELECT * FROM suprimentos WHERE equipamento_id = ?').all(id);
+    const suprimentosResult = await db.query('SELECT * FROM suprimentos WHERE equipamento_id = $1', [id]);
 
-    const alertas = db.prepare(`
+    const alertasResult = await db.query(`
       SELECT * FROM alertas
-      WHERE equipamento_id = ?
+      WHERE equipamento_id = $1
       ORDER BY created_at DESC
       LIMIT 20
-    `).all(id);
+    `, [id]);
 
     res.json({
       success: true,
       data: {
         equipamento,
         periodo: { data_inicio: data_inicio || null, data_fim: data_fim || null },
-        estatisticas: stats,
-        leituras,
-        suprimentos,
-        alertas,
+        estatisticas: statsResult.rows[0],
+        leituras: leiturasResult.rows,
+        suprimentos: suprimentosResult.rows,
+        alertas: alertasResult.rows,
       },
     });
   } catch (error) {
@@ -153,7 +161,7 @@ router.get('/equipamento/:id', (req: Request, res: Response) => {
   }
 });
 
-router.get('/consumo', (req: Request, res: Response) => {
+router.get('/consumo', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { cliente, data_inicio, data_fim } = req.query;
@@ -175,27 +183,31 @@ router.get('/consumo', (req: Request, res: Response) => {
       WHERE 1=1
     `;
     const params: any[] = [];
+    let paramIndex = 1;
 
     if (cliente) {
-      query += ' AND e.cliente = ?';
+      query += ` AND e.cliente = $${paramIndex}`;
       params.push(cliente);
+      paramIndex++;
     }
 
     if (data_inicio) {
-      query += ' AND l.data_leitura >= ?';
+      query += ` AND l.data_leitura >= $${paramIndex}`;
       params.push(data_inicio);
+      paramIndex++;
     }
 
     if (data_fim) {
-      query += ' AND l.data_leitura <= ?';
+      query += ` AND l.data_leitura <= $${paramIndex}`;
       params.push(data_fim);
+      paramIndex++;
     }
 
     query += ' GROUP BY e.id ORDER BY e.cliente, total_prints DESC';
 
-    const consumo = db.prepare(query).all(...params);
+    const consumoResult = await db.query(query, params);
 
-    const totalByClient = db.prepare(`
+    let totalByClientQuery = `
       SELECT
         e.cliente,
         SUM(max_counter - min_counter) as total_prints
@@ -206,20 +218,37 @@ router.get('/consumo', (req: Request, res: Response) => {
           MIN(contador_total) as min_counter
         FROM leituras
         WHERE 1=1
-        ${data_inicio ? 'AND data_leitura >= ?' : ''}
-        ${data_fim ? 'AND data_leitura <= ?' : ''}
+    `;
+    const totalByClientParams: any[] = [];
+    let totalParamIndex = 1;
+
+    if (data_inicio) {
+      totalByClientQuery += ` AND data_leitura >= $${totalParamIndex}`;
+      totalByClientParams.push(data_inicio);
+      totalParamIndex++;
+    }
+
+    if (data_fim) {
+      totalByClientQuery += ` AND data_leitura <= $${totalParamIndex}`;
+      totalByClientParams.push(data_fim);
+      totalParamIndex++;
+    }
+
+    totalByClientQuery += `
         GROUP BY equipamento_id
       ) l
       LEFT JOIN equipamentos e ON l.equipamento_id = e.id
       GROUP BY e.cliente
       ORDER BY total_prints DESC
-    `).all(...params);
+    `;
+
+    const totalByClientResult = await db.query(totalByClientQuery, totalByClientParams);
 
     res.json({
       success: true,
       data: {
-        consumo_por_equipamento: consumo,
-        consumo_por_cliente: totalByClient,
+        consumo_por_equipamento: consumoResult.rows,
+        consumo_por_cliente: totalByClientResult.rows,
       },
     });
   } catch (error) {
@@ -258,27 +287,31 @@ router.get('/export/excel', async (req: Request, res: Response) => {
       WHERE 1=1
     `;
     const params: any[] = [];
+    let paramIndex = 1;
 
     if (cliente) {
-      query += ' AND e.cliente = ?';
+      query += ` AND e.cliente = $${paramIndex}`;
       params.push(cliente);
+      paramIndex++;
     }
 
     if (data_inicio) {
-      query += ' AND l.data_leitura >= ?';
+      query += ` AND l.data_leitura >= $${paramIndex}`;
       params.push(data_inicio);
+      paramIndex++;
     }
 
     if (data_fim) {
-      query += ' AND l.data_leitura <= ?';
+      query += ` AND l.data_leitura <= $${paramIndex}`;
       params.push(data_fim);
+      paramIndex++;
     }
 
     query += ' ORDER BY e.cliente, l.data_leitura DESC';
 
-    const data = db.prepare(query).all(...params);
+    const dataResult = await db.query(query, params);
 
-    const worksheet = XLSX.utils.json_to_sheet(data);
+    const worksheet = XLSX.utils.json_to_sheet(dataResult.rows);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Relatório');
 
@@ -327,27 +360,31 @@ router.get('/export/pdf', async (req: Request, res: Response) => {
       WHERE 1=1
     `;
     const params: any[] = [];
+    let paramIndex = 1;
 
     if (cliente) {
-      query += ' AND e.cliente = ?';
+      query += ` AND e.cliente = $${paramIndex}`;
       params.push(cliente);
+      paramIndex++;
     }
 
     if (data_inicio) {
-      query += ' AND l.data_leitura >= ?';
+      query += ` AND l.data_leitura >= $${paramIndex}`;
       params.push(data_inicio);
+      paramIndex++;
     }
 
     if (data_fim) {
-      query += ' AND l.data_leitura <= ?';
+      query += ` AND l.data_leitura <= $${paramIndex}`;
       params.push(data_fim);
+      paramIndex++;
     }
 
     query += ' GROUP BY e.id ORDER BY e.cliente';
 
-    const data = db.prepare(query).all(...params) as any[];
+    const dataResult = await db.query(query, params);
 
-    const tableData = data.map((row) => [
+    const tableData = dataResult.rows.map((row) => [
       row.cliente || '',
       row.ip || '',
       row.modelo || '',

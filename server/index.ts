@@ -44,7 +44,7 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
 async function main() {
   try {
     console.log('Initializing database...');
-    initDatabase();
+    await initDatabase();
 
     console.log('Starting scheduler...');
     startScheduler();

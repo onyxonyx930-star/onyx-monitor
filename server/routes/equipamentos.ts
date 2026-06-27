@@ -4,11 +4,12 @@ import { getPrinterData, getSuppliesData, checkOnline } from '../snmp';
 
 const router = Router();
 
-router.get('/stats', (req: Request, res: Response) => {
+router.get('/stats', async (req: Request, res: Response) => {
   try {
     const db = getDb();
 
-    const totalEquipamentos = (db.prepare('SELECT COUNT(*) as count FROM equipamentos').get() as any).count;
+    const totalResult = await db.query('SELECT COUNT(*) as count FROM equipamentos');
+    const totalEquipamentos = Number(totalResult.rows[0].count);
 
     const ultimaLeituraSubquery = `
       SELECT l.equipamento_id, l.status_online, l.data_leitura
@@ -20,32 +21,39 @@ router.get('/stats', (req: Request, res: Response) => {
       ) latest ON l.equipamento_id = latest.equipamento_id AND l.data_leitura = latest.max_data
     `;
 
-    const onlineCount = (db.prepare(`
+    const onlineResult = await db.query(`
       SELECT COUNT(*) as count FROM (${ultimaLeituraSubquery}) WHERE status_online = 1
-    `).get() as any).count;
+    `);
+    const onlineCount = Number(onlineResult.rows[0].count);
 
-    const offlineCount = (db.prepare(`
+    const offlineResult = await db.query(`
       SELECT COUNT(*) as count FROM (${ultimaLeituraSubquery}) WHERE status_online = 0
-    `).get() as any).count;
+    `);
+    const offlineCount = Number(offlineResult.rows[0].count);
 
-    const tonersBaixos = (db.prepare("SELECT COUNT(*) as count FROM suprimentos WHERE percentual <= 20").get() as any).count;
-    const alertasCriticos = (db.prepare("SELECT COUNT(*) as count FROM alertas WHERE resolvido = 0 AND nivel = 'critical'").get() as any).count;
+    const tonersResult = await db.query("SELECT COUNT(*) as count FROM suprimentos WHERE percentual <= 20");
+    const tonersBaixos = Number(tonersResult.rows[0].count);
+
+    const alertasResult = await db.query("SELECT COUNT(*) as count FROM alertas WHERE resolvido = 0 AND nivel = 'critical'");
+    const alertasCriticos = Number(alertasResult.rows[0].count);
 
     const now = new Date();
     const firstDayOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-    const totalPaginasMes = (db.prepare(`
-      SELECT COALESCE(SUM(contador_total), 0) as total FROM leituras WHERE data_leitura >= ?
-    `).get(firstDayOfMonth) as any).total;
+    const paginasResult = await db.query(
+      'SELECT COALESCE(SUM(contador_total), 0) as total FROM leituras WHERE data_leitura >= $1',
+      [firstDayOfMonth]
+    );
+    const totalPaginasMes = Number(paginasResult.rows[0].total);
 
-    const clientesVolume = db.prepare(`
+    const clientesResult = await db.query(`
       SELECT e.cliente, SUM(l.contador_total) as paginas
       FROM equipamentos e
       INNER JOIN leituras l ON l.equipamento_id = e.id
-      WHERE l.data_leitura >= ?
+      WHERE l.data_leitura >= $1
       GROUP BY e.cliente
       ORDER BY paginas DESC
       LIMIT 10
-    `).all(firstDayOfMonth);
+    `, [firstDayOfMonth]);
 
     res.json({
       success: true,
@@ -56,7 +64,7 @@ router.get('/stats', (req: Request, res: Response) => {
         toners_baixos: tonersBaixos,
         alertas_criticos: alertasCriticos,
         total_paginas_mes: totalPaginasMes,
-        clientes_maior_volume: clientesVolume,
+        clientes_maior_volume: clientesResult.rows,
       },
     });
   } catch (error) {
@@ -68,7 +76,7 @@ router.get('/stats', (req: Request, res: Response) => {
   }
 });
 
-router.get('/', (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { cliente, status, search, page = '1', per_page = '10' } = req.query;
@@ -82,41 +90,46 @@ router.get('/', (req: Request, res: Response) => {
     `;
     const params: any[] = [];
     const countParams: any[] = [];
+    let paramIndex = 1;
 
     if (cliente) {
-      query += ' AND e.cliente = ?';
-      countQuery += ' AND e.cliente = ?';
+      query += ` AND e.cliente = $${paramIndex}`;
+      countQuery += ` AND e.cliente = $${paramIndex}`;
       params.push(cliente);
       countParams.push(cliente);
+      paramIndex++;
     }
 
     if (status) {
-      query += ' AND e.status_monitoramento = ?';
-      countQuery += ' AND e.status_monitoramento = ?';
+      query += ` AND e.status_monitoramento = $${paramIndex}`;
+      countQuery += ` AND e.status_monitoramento = $${paramIndex}`;
       params.push(status);
       countParams.push(status);
+      paramIndex++;
     }
 
     if (search) {
-      const searchClause = ' AND (e.cliente LIKE ? OR e.ip LIKE ? OR e.modelo LIKE ? OR e.numero_serie LIKE ?)';
+      const searchClause = ` AND (e.cliente LIKE $${paramIndex} OR e.ip LIKE $${paramIndex + 1} OR e.modelo LIKE $${paramIndex + 2} OR e.numero_serie LIKE $${paramIndex + 3})`;
       const searchTerm = `%${search}%`;
       query += searchClause;
       countQuery += searchClause;
       params.push(searchTerm, searchTerm, searchTerm, searchTerm);
       countParams.push(searchTerm, searchTerm, searchTerm, searchTerm);
+      paramIndex += 4;
     }
 
-    const total = (db.prepare(countQuery).get(...countParams) as any).count;
+    const countResult = await db.query(countQuery, countParams);
+    const total = Number(countResult.rows[0].count);
 
     const pageNum = Math.max(1, Number(page));
     const perPageNum = Math.max(1, Math.min(100, Number(per_page)));
     const offset = (pageNum - 1) * perPageNum;
 
-    query += ' ORDER BY e.created_at DESC LIMIT ? OFFSET ?';
+    query += ` ORDER BY e.created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
     params.push(perPageNum, offset);
 
-    const equipamentos = db.prepare(query).all(...params);
-    res.json({ success: true, data: { data: equipamentos, total } });
+    const result = await db.query(query, params);
+    res.json({ success: true, data: { data: result.rows, total } });
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -126,12 +139,13 @@ router.get('/', (req: Request, res: Response) => {
   }
 });
 
-router.get('/:id', (req: Request, res: Response) => {
+router.get('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { id } = req.params;
 
-    const equipamento = db.prepare('SELECT * FROM equipamentos WHERE id = ?').get(id) as any;
+    const equipResult = await db.query('SELECT * FROM equipamentos WHERE id = $1', [id]);
+    const equipamento = equipResult.rows[0];
 
     if (!equipamento) {
       return res.status(404).json({
@@ -140,21 +154,22 @@ router.get('/:id', (req: Request, res: Response) => {
       });
     }
 
-    const ultimaLeitura = db.prepare(`
-      SELECT * FROM leituras WHERE equipamento_id = ? ORDER BY data_leitura DESC LIMIT 1
-    `).get(id);
+    const leituraResult = await db.query(
+      'SELECT * FROM leituras WHERE equipamento_id = $1 ORDER BY data_leitura DESC LIMIT 1',
+      [id]
+    );
 
-    const suprimentos = db.prepare('SELECT * FROM suprimentos WHERE equipamento_id = ?').all(id);
+    const suprimentosResult = await db.query('SELECT * FROM suprimentos WHERE equipamento_id = $1', [id]);
 
-    const configColeta = db.prepare('SELECT * FROM config_coleta WHERE equipamento_id = ?').get(id);
+    const configResult = await db.query('SELECT * FROM config_coleta WHERE equipamento_id = $1', [id]);
 
     res.json({
       success: true,
       data: {
         ...equipamento,
-        ultima_leitura: ultimaLeitura || null,
-        suprimentos,
-        config_coleta: configColeta || null,
+        ultima_leitura: leituraResult.rows[0] || null,
+        suprimentos: suprimentosResult.rows,
+        config_coleta: configResult.rows[0] || null,
       },
     });
   } catch (error) {
@@ -166,7 +181,7 @@ router.get('/:id', (req: Request, res: Response) => {
   }
 });
 
-router.post('/', (req: Request, res: Response) => {
+router.post('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const {
@@ -181,27 +196,27 @@ router.post('/', (req: Request, res: Response) => {
       });
     }
 
-    const result = db.prepare(`
-      INSERT INTO equipamentos (cliente, unidade, ip, comunidade_snmp, fabricante, modelo, numero_serie, localizacao, contrato, status_monitoramento)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      cliente,
-      unidade || null,
-      ip,
-      comunidade_snmp || 'public',
-      fabricante || null,
-      modelo || null,
-      numero_serie || null,
-      localizacao || null,
-      contrato || null,
-      status_monitoramento || 'ativo',
+    const result = await db.query(
+      `INSERT INTO equipamentos (cliente, unidade, ip, comunidade_snmp, fabricante, modelo, numero_serie, localizacao, contrato, status_monitoramento)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING *`,
+      [
+        cliente,
+        unidade || null,
+        ip,
+        comunidade_snmp || 'public',
+        fabricante || null,
+        modelo || null,
+        numero_serie || null,
+        localizacao || null,
+        contrato || null,
+        status_monitoramento || 'ativo',
+      ]
     );
-
-    const equipamento = db.prepare('SELECT * FROM equipamentos WHERE id = ?').get(result.lastInsertRowid);
 
     res.status(201).json({
       success: true,
-      data: equipamento,
+      data: result.rows[0],
       message: 'Equipamento criado com sucesso',
     });
   } catch (error) {
@@ -213,7 +228,7 @@ router.post('/', (req: Request, res: Response) => {
   }
 });
 
-router.put('/:id', (req: Request, res: Response) => {
+router.put('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { id } = req.params;
@@ -222,7 +237,8 @@ router.put('/:id', (req: Request, res: Response) => {
       numero_serie, localizacao, contrato, status_monitoramento,
     } = req.body;
 
-    const existing = db.prepare('SELECT * FROM equipamentos WHERE id = ?').get(id);
+    const existingResult = await db.query('SELECT * FROM equipamentos WHERE id = $1', [id]);
+    const existing = existingResult.rows[0];
 
     if (!existing) {
       return res.status(404).json({
@@ -231,31 +247,31 @@ router.put('/:id', (req: Request, res: Response) => {
       });
     }
 
-    db.prepare(`
-      UPDATE equipamentos
-      SET cliente = ?, unidade = ?, ip = ?, comunidade_snmp = ?, fabricante = ?,
-          modelo = ?, numero_serie = ?, localizacao = ?, contrato = ?,
-          status_monitoramento = ?, updated_at = datetime('now')
-      WHERE id = ?
-    `).run(
-      cliente || (existing as any).cliente,
-      unidade || (existing as any).unidade,
-      ip || (existing as any).ip,
-      comunidade_snmp || (existing as any).comunidade_snmp,
-      fabricante || (existing as any).fabricante,
-      modelo || (existing as any).modelo,
-      numero_serie || (existing as any).numero_serie,
-      localizacao || (existing as any).localizacao,
-      contrato || (existing as any).contrato,
-      status_monitoramento || (existing as any).status_monitoramento,
-      id,
+    const result = await db.query(
+      `UPDATE equipamentos
+       SET cliente = $1, unidade = $2, ip = $3, comunidade_snmp = $4, fabricante = $5,
+           modelo = $6, numero_serie = $7, localizacao = $8, contrato = $9,
+           status_monitoramento = $10, updated_at = (NOW() AT TIME ZONE 'UTC')::text
+       WHERE id = $11
+       RETURNING *`,
+      [
+        cliente || existing.cliente,
+        unidade || existing.unidade,
+        ip || existing.ip,
+        comunidade_snmp || existing.comunidade_snmp,
+        fabricante || existing.fabricante,
+        modelo || existing.modelo,
+        numero_serie || existing.numero_serie,
+        localizacao || existing.localizacao,
+        contrato || existing.contrato,
+        status_monitoramento || existing.status_monitoramento,
+        id,
+      ]
     );
-
-    const equipamento = db.prepare('SELECT * FROM equipamentos WHERE id = ?').get(id);
 
     res.json({
       success: true,
-      data: equipamento,
+      data: result.rows[0],
       message: 'Equipamento atualizado com sucesso',
     });
   } catch (error) {
@@ -267,21 +283,21 @@ router.put('/:id', (req: Request, res: Response) => {
   }
 });
 
-router.delete('/:id', (req: Request, res: Response) => {
+router.delete('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { id } = req.params;
 
-    const existing = db.prepare('SELECT * FROM equipamentos WHERE id = ?').get(id);
+    const existingResult = await db.query('SELECT * FROM equipamentos WHERE id = $1', [id]);
 
-    if (!existing) {
+    if (!existingResult.rows[0]) {
       return res.status(404).json({
         success: false,
         message: 'Equipamento não encontrado',
       });
     }
 
-    db.prepare('DELETE FROM equipamentos WHERE id = ?').run(id);
+    await db.query('DELETE FROM equipamentos WHERE id = $1', [id]);
 
     res.json({
       success: true,
@@ -301,7 +317,8 @@ router.post('/:id/collect', async (req: Request, res: Response) => {
     const db = getDb();
     const { id } = req.params;
 
-    const equipamento = db.prepare('SELECT * FROM equipamentos WHERE id = ?').get(id) as any;
+    const equipResult = await db.query('SELECT * FROM equipamentos WHERE id = $1', [id]);
+    const equipamento = equipResult.rows[0];
 
     if (!equipamento) {
       return res.status(404).json({
@@ -312,26 +329,28 @@ router.post('/:id/collect', async (req: Request, res: Response) => {
 
     const printerData = await getPrinterData(equipamento.ip, equipamento.comunidade_snmp);
 
-    const leituraResult = db.prepare(`
-      INSERT INTO leituras (
+    const leituraResult = await db.query(
+      `INSERT INTO leituras (
         equipamento_id, contador_total, contador_pb, contador_cor,
         toner_preto, toner_ciano, toner_magenta, toner_amarelo,
         status_online, mensagens_erro, numero_serie_equip, modelo_equip, nome_equip
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      equipamento.id,
-      printerData.contador_total,
-      printerData.contador_pb,
-      printerData.contador_cor,
-      printerData.toner_preto,
-      printerData.toner_ciano,
-      printerData.toner_magenta,
-      printerData.toner_amarelo,
-      printerData.online ? 1 : 0,
-      printerData.mensagens_erro,
-      printerData.numero_serie,
-      printerData.modelo_equip,
-      printerData.nome_equip,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      RETURNING *`,
+      [
+        equipamento.id,
+        printerData.contador_total,
+        printerData.contador_pb,
+        printerData.contador_cor,
+        printerData.toner_preto,
+        printerData.toner_ciano,
+        printerData.toner_magenta,
+        printerData.toner_amarelo,
+        printerData.online ? 1 : 0,
+        printerData.mensagens_erro,
+        printerData.numero_serie,
+        printerData.modelo_equip,
+        printerData.nome_equip,
+      ]
     );
 
     const tonerData = [
@@ -342,27 +361,29 @@ router.post('/:id/collect', async (req: Request, res: Response) => {
     ];
 
     for (const toner of tonerData) {
-      const existing = db.prepare('SELECT id FROM suprimentos WHERE equipamento_id = ? AND tipo = ?')
-        .get(equipamento.id, toner.tipo) as any;
+      const existingSupResult = await db.query(
+        'SELECT id FROM suprimentos WHERE equipamento_id = $1 AND tipo = $2',
+        [equipamento.id, toner.tipo]
+      );
+      const existingSup = existingSupResult.rows[0];
 
-      if (existing) {
-        db.prepare(`
-          UPDATE suprimentos SET percentual = ?, ultima_leitura = datetime('now'), updated_at = datetime('now')
-          WHERE id = ?
-        `).run(toner.percentual, existing.id);
+      if (existingSup) {
+        await db.query(
+          `UPDATE suprimentos SET percentual = $1, ultima_leitura = (NOW() AT TIME ZONE 'UTC')::text, updated_at = (NOW() AT TIME ZONE 'UTC')::text
+           WHERE id = $2`,
+          [toner.percentual, existingSup.id]
+        );
       } else {
-        db.prepare(`
-          INSERT INTO suprimentos (equipamento_id, tipo, percentual)
-          VALUES (?, ?, ?)
-        `).run(equipamento.id, toner.tipo, toner.percentual);
+        await db.query(
+          'INSERT INTO suprimentos (equipamento_id, tipo, percentual) VALUES ($1, $2, $3)',
+          [equipamento.id, toner.tipo, toner.percentual]
+        );
       }
     }
 
-    const leitura = db.prepare('SELECT * FROM leituras WHERE id = ?').get(Number(leituraResult.lastInsertRowid));
-
     res.json({
       success: true,
-      data: leitura,
+      data: leituraResult.rows[0],
       message: 'Coleta realizada com sucesso',
     });
   } catch (error) {

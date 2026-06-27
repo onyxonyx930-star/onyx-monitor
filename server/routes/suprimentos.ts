@@ -3,7 +3,7 @@ import { getDb } from '../database';
 
 const router = Router();
 
-router.get('/', (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { equipamento_id, tipo } = req.query;
@@ -15,22 +15,25 @@ router.get('/', (req: Request, res: Response) => {
       WHERE 1=1
     `;
     const params: any[] = [];
+    let paramIndex = 1;
 
     if (equipamento_id) {
-      query += ' AND s.equipamento_id = ?';
+      query += ` AND s.equipamento_id = $${paramIndex}`;
       params.push(equipamento_id);
+      paramIndex++;
     }
 
     if (tipo) {
-      query += ' AND s.tipo = ?';
+      query += ` AND s.tipo = $${paramIndex}`;
       params.push(tipo);
+      paramIndex++;
     }
 
     query += ' ORDER BY s.percentual ASC';
 
-    const suprimentos = db.prepare(query).all(...params);
+    const result = await db.query(query, params);
 
-    res.json({ success: true, data: suprimentos });
+    res.json({ success: true, data: result.rows });
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -40,14 +43,14 @@ router.get('/', (req: Request, res: Response) => {
   }
 });
 
-router.get('/equipamento/:id', (req: Request, res: Response) => {
+router.get('/equipamento/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { id } = req.params;
 
-    const suprimentos = db.prepare('SELECT * FROM suprimentos WHERE equipamento_id = ?').all(id);
+    const result = await db.query('SELECT * FROM suprimentos WHERE equipamento_id = $1', [id]);
 
-    res.json({ success: true, data: suprimentos });
+    res.json({ success: true, data: result.rows });
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -57,13 +60,14 @@ router.get('/equipamento/:id', (req: Request, res: Response) => {
   }
 });
 
-router.put('/:id', (req: Request, res: Response) => {
+router.put('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { id } = req.params;
     const { percentual, previsao_troca } = req.body;
 
-    const existing = db.prepare('SELECT * FROM suprimentos WHERE id = ?').get(id);
+    const existingResult = await db.query('SELECT * FROM suprimentos WHERE id = $1', [id]);
+    const existing = existingResult.rows[0];
 
     if (!existing) {
       return res.status(404).json({
@@ -72,21 +76,21 @@ router.put('/:id', (req: Request, res: Response) => {
       });
     }
 
-    db.prepare(`
-      UPDATE suprimentos
-      SET percentual = ?, previsao_troca = ?, updated_at = datetime('now')
-      WHERE id = ?
-    `).run(
-      percentual !== undefined ? percentual : (existing as any).percentual,
-      previsao_troca !== undefined ? previsao_troca : (existing as any).previsao_troca,
-      id,
+    const result = await db.query(
+      `UPDATE suprimentos
+       SET percentual = $1, previsao_troca = $2, updated_at = (NOW() AT TIME ZONE 'UTC')::text
+       WHERE id = $3
+       RETURNING *`,
+      [
+        percentual !== undefined ? percentual : existing.percentual,
+        previsao_troca !== undefined ? previsao_troca : existing.previsao_troca,
+        id,
+      ]
     );
-
-    const suprimento = db.prepare('SELECT * FROM suprimentos WHERE id = ?').get(id);
 
     res.json({
       success: true,
-      data: suprimento,
+      data: result.rows[0],
       message: 'Suprimento atualizado com sucesso',
     });
   } catch (error) {

@@ -3,7 +3,7 @@ import { getDb } from '../database';
 
 const router = Router();
 
-router.get('/', (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { equipamento_id, data_inicio, data_fim, page = '1', limit = '50' } = req.query;
@@ -15,35 +15,39 @@ router.get('/', (req: Request, res: Response) => {
       WHERE 1=1
     `;
     const params: any[] = [];
+    let paramIndex = 1;
 
     if (equipamento_id) {
-      query += ' AND l.equipamento_id = ?';
+      query += ` AND l.equipamento_id = $${paramIndex}`;
       params.push(equipamento_id);
+      paramIndex++;
     }
 
     if (data_inicio) {
-      query += ' AND l.data_leitura >= ?';
+      query += ` AND l.data_leitura >= $${paramIndex}`;
       params.push(data_inicio);
+      paramIndex++;
     }
 
     if (data_fim) {
-      query += ' AND l.data_leitura <= ?';
+      query += ` AND l.data_leitura <= $${paramIndex}`;
       params.push(data_fim);
+      paramIndex++;
     }
 
     const countQuery = query.replace('SELECT l.*, e.cliente, e.modelo, e.numero_serie', 'SELECT COUNT(*) as total');
-    const totalResult = db.prepare(countQuery).get(...params) as any;
-    const total = totalResult.total;
+    const totalResult = await db.query(countQuery, params);
+    const total = Number(totalResult.rows[0].total);
 
     const offset = (Number(page) - 1) * Number(limit);
-    query += ' ORDER BY l.data_leitura DESC LIMIT ? OFFSET ?';
+    query += ` ORDER BY l.data_leitura DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
     params.push(Number(limit), offset);
 
-    const leituras = db.prepare(query).all(...params);
+    const result = await db.query(query, params);
 
     res.json({
       success: true,
-      data: { data: leituras, total },
+      data: { data: result.rows, total },
     });
   } catch (error) {
     res.status(500).json({
@@ -54,26 +58,26 @@ router.get('/', (req: Request, res: Response) => {
   }
 });
 
-router.get('/equipamento/:id', (req: Request, res: Response) => {
+router.get('/equipamento/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { id } = req.params;
     const { page = '1', limit = '100' } = req.query;
 
-    const totalResult = db.prepare('SELECT COUNT(*) as total FROM leituras WHERE equipamento_id = ?').get(id) as any;
-    const total = totalResult.total;
+    const totalResult = await db.query('SELECT COUNT(*) as total FROM leituras WHERE equipamento_id = $1', [id]);
+    const total = Number(totalResult.rows[0].total);
 
     const offset = (Number(page) - 1) * Number(limit);
-    const leituras = db.prepare(`
+    const result = await db.query(`
       SELECT * FROM leituras
-      WHERE equipamento_id = ?
+      WHERE equipamento_id = $1
       ORDER BY data_leitura DESC
-      LIMIT ? OFFSET ?
-    `).all(id, Number(limit), offset);
+      LIMIT $2 OFFSET $3
+    `, [id, Number(limit), offset]);
 
     res.json({
       success: true,
-      data: leituras,
+      data: result.rows,
     });
   } catch (error) {
     res.status(500).json({
@@ -84,17 +88,19 @@ router.get('/equipamento/:id', (req: Request, res: Response) => {
   }
 });
 
-router.get('/:id', (req: Request, res: Response) => {
+router.get('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { id } = req.params;
 
-    const leitura = db.prepare(`
+    const result = await db.query(`
       SELECT l.*, e.cliente, e.modelo, e.numero_serie, e.ip
       FROM leituras l
       LEFT JOIN equipamentos e ON l.equipamento_id = e.id
-      WHERE l.id = ?
-    `).get(id);
+      WHERE l.id = $1
+    `, [id]);
+
+    const leitura = result.rows[0];
 
     if (!leitura) {
       return res.status(404).json({

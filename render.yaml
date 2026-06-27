@@ -9,7 +9,7 @@ services:
       - NODE_ENV=production
       - PORT=3001
       - JWT_SECRET=your-secret-key-here
-      - DB_PATH=./data/onyx-monitor.db
+      - SUPABASE_URL=postgresql://postgres:your-password@db.your-project.supabase.co:5432/postgres
       - SNMP_DEFAULT_COMMUNITY=public
       - SNMP_DEFAULT_PORT=161
       - SNMP_TIMEOUT=5000

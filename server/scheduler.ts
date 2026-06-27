@@ -20,7 +20,8 @@ interface LeituraData {
 
 async function collectEquipmentData(equipamentoId: number): Promise<LeituraData | null> {
   const db = getDb();
-  const equipamento = db.prepare('SELECT * FROM equipamentos WHERE id = ?').get(equipamentoId) as any;
+  const result = await db.query('SELECT * FROM equipamentos WHERE id = $1', [equipamentoId]);
+  const equipamento = result.rows[0];
 
   if (!equipamento || equipamento.status_monitoramento !== 'ativo') {
     return null;
@@ -69,36 +70,36 @@ async function collectEquipmentData(equipamentoId: number): Promise<LeituraData 
   }
 }
 
-function saveLeitura(leitura: LeituraData): number {
+async function saveLeitura(leitura: LeituraData): Promise<number> {
   const db = getDb();
-  const stmt = db.prepare(`
-    INSERT INTO leituras (
+  const result = await db.query(
+    `INSERT INTO leituras (
       equipamento_id, contador_total, contador_pb, contador_cor,
       toner_preto, toner_ciano, toner_magenta, toner_amarelo,
       status_online, mensagens_erro, numero_serie_equip, modelo_equip, nome_equip
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-
-  const result = stmt.run(
-    leitura.equipamento_id,
-    leitura.contador_total,
-    leitura.contador_pb,
-    leitura.contador_cor,
-    leitura.toner_preto,
-    leitura.toner_ciano,
-    leitura.toner_magenta,
-    leitura.toner_amarelo,
-    leitura.status_online,
-    leitura.mensagens_erro,
-    leitura.numero_serie_equip,
-    leitura.modelo_equip,
-    leitura.nome_equip,
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    RETURNING id`,
+    [
+      leitura.equipamento_id,
+      leitura.contador_total,
+      leitura.contador_pb,
+      leitura.contador_cor,
+      leitura.toner_preto,
+      leitura.toner_ciano,
+      leitura.toner_magenta,
+      leitura.toner_amarelo,
+      leitura.status_online,
+      leitura.mensagens_erro,
+      leitura.numero_serie_equip,
+      leitura.modelo_equip,
+      leitura.nome_equip,
+    ]
   );
 
-  return Number(result.lastInsertRowid);
+  return Number(result.rows[0].id);
 }
 
-function updateSuprimentos(equipamentoId: number, leitura: LeituraData): void {
+async function updateSuprimentos(equipamentoId: number, leitura: LeituraData): Promise<void> {
   const db = getDb();
   const tonerData = [
     { tipo: 'preto', percentual: leitura.toner_preto },
@@ -108,8 +109,11 @@ function updateSuprimentos(equipamentoId: number, leitura: LeituraData): void {
   ];
 
   for (const toner of tonerData) {
-    const existing = db.prepare('SELECT id FROM suprimentos WHERE equipamento_id = ? AND tipo = ?')
-      .get(equipamentoId, toner.tipo) as any;
+    const existingResult = await db.query(
+      'SELECT id FROM suprimentos WHERE equipamento_id = $1 AND tipo = $2',
+      [equipamentoId, toner.tipo]
+    );
+    const existing = existingResult.rows[0];
 
     const previsaoTroca = toner.percentual <= 10
       ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
@@ -118,40 +122,45 @@ function updateSuprimentos(equipamentoId: number, leitura: LeituraData): void {
         : null;
 
     if (existing) {
-      db.prepare(`
-        UPDATE suprimentos
-        SET percentual = ?, ultima_leitura = datetime('now'), previsao_troca = ?, updated_at = datetime('now')
-        WHERE id = ?
-      `).run(toner.percentual, previsaoTroca, existing.id);
+      await db.query(
+        `UPDATE suprimentos
+         SET percentual = $1, ultima_leitura = (NOW() AT TIME ZONE 'UTC')::text, previsao_troca = $2, updated_at = (NOW() AT TIME ZONE 'UTC')::text
+         WHERE id = $3`,
+        [toner.percentual, previsaoTroca, existing.id]
+      );
     } else {
-      db.prepare(`
-        INSERT INTO suprimentos (equipamento_id, tipo, percentual, previsao_troca)
-        VALUES (?, ?, ?, ?)
-      `).run(equipamentoId, toner.tipo, toner.percentual, previsaoTroca);
+      await db.query(
+        `INSERT INTO suprimentos (equipamento_id, tipo, percentual, previsao_troca)
+         VALUES ($1, $2, $3, $4)`,
+        [equipamentoId, toner.tipo, toner.percentual, previsaoTroca]
+      );
     }
   }
 }
 
-function generateAlertas(equipamentoId: number, leitura: LeituraData): void {
+async function generateAlertas(equipamentoId: number, leitura: LeituraData): Promise<void> {
   const db = getDb();
 
   if (!leitura.status_online) {
-    const existing = db.prepare(`
-      SELECT id FROM alertas
-      WHERE equipamento_id = ? AND tipo = 'offline' AND resolvido = 0
-    `).get(equipamentoId);
+    const existingResult = await db.query(
+      `SELECT id FROM alertas
+       WHERE equipamento_id = $1 AND tipo = 'offline' AND resolvido = 0`,
+      [equipamentoId]
+    );
 
-    if (!existing) {
-      db.prepare(`
-        INSERT INTO alertas (equipamento_id, tipo, mensagem, nivel)
-        VALUES (?, 'offline', ?, 'critical')
-      `).run(equipamentoId, `Equipamento ${leitura.nome_equip || equipamentoId} está offline`);
+    if (!existingResult.rows[0]) {
+      await db.query(
+        `INSERT INTO alertas (equipamento_id, tipo, mensagem, nivel)
+         VALUES ($1, 'offline', $2, 'critical')`,
+        [equipamentoId, `Equipamento ${leitura.nome_equip || equipamentoId} está offline`]
+      );
     }
   } else {
-    db.prepare(`
-      UPDATE alertas SET resolvido = 1, resolvido_em = datetime('now')
-      WHERE equipamento_id = ? AND tipo = 'offline' AND resolvido = 0
-    `).run(equipamentoId);
+    await db.query(
+      `UPDATE alertas SET resolvido = 1, resolvido_em = (NOW() AT TIME ZONE 'UTC')::text
+       WHERE equipamento_id = $1 AND tipo = 'offline' AND resolvido = 0`,
+      [equipamentoId]
+    );
   }
 
   const tonerChecks = [
@@ -163,48 +172,55 @@ function generateAlertas(equipamentoId: number, leitura: LeituraData): void {
 
   for (const toner of tonerChecks) {
     if (toner.nivel === 0) {
-      const existing = db.prepare(`
-        SELECT id FROM alertas
-        WHERE equipamento_id = ? AND tipo = 'toner_zerado' AND mensagem LIKE ? AND resolvido = 0
-      `).get(equipamentoId, `%${toner.tipo}%`);
+      const existingResult = await db.query(
+        `SELECT id FROM alertas
+         WHERE equipamento_id = $1 AND tipo = 'toner_zerado' AND mensagem LIKE $2 AND resolvido = 0`,
+        [equipamentoId, `%${toner.tipo}%`]
+      );
 
-      if (!existing) {
-        db.prepare(`
-          INSERT INTO alertas (equipamento_id, tipo, mensagem, nivel)
-          VALUES (?, 'toner_zerado', ?, 'critical')
-        `).run(equipamentoId, `Toner ${toner.tipo} está zerado no equipamento ${leitura.nome_equip || equipamentoId}`);
+      if (!existingResult.rows[0]) {
+        await db.query(
+          `INSERT INTO alertas (equipamento_id, tipo, mensagem, nivel)
+           VALUES ($1, 'toner_zerado', $2, 'critical')`,
+          [equipamentoId, `Toner ${toner.tipo} está zerado no equipamento ${leitura.nome_equip || equipamentoId}`]
+        );
       }
     } else if (toner.nivel <= 15) {
-      const existing = db.prepare(`
-        SELECT id FROM alertas
-        WHERE equipamento_id = ? AND tipo = 'toner_baixo' AND mensagem LIKE ? AND resolvido = 0
-      `).get(equipamentoId, `%${toner.tipo}%`);
+      const existingResult = await db.query(
+        `SELECT id FROM alertas
+         WHERE equipamento_id = $1 AND tipo = 'toner_baixo' AND mensagem LIKE $2 AND resolvido = 0`,
+        [equipamentoId, `%${toner.tipo}%`]
+      );
 
-      if (!existing) {
-        db.prepare(`
-          INSERT INTO alertas (equipamento_id, tipo, mensagem, nivel)
-          VALUES (?, 'toner_baixo', ?, 'warning')
-        `).run(equipamentoId, `Toner ${toner.tipo} com ${toner.nivel}% no equipamento ${leitura.nome_equip || equipamentoId}`);
+      if (!existingResult.rows[0]) {
+        await db.query(
+          `INSERT INTO alertas (equipamento_id, tipo, mensagem, nivel)
+           VALUES ($1, 'toner_baixo', $2, 'warning')`,
+          [equipamentoId, `Toner ${toner.tipo} com ${toner.nivel}% no equipamento ${leitura.nome_equip || equipamentoId}`]
+        );
       }
     } else {
-      db.prepare(`
-        UPDATE alertas SET resolvido = 1, resolvido_em = datetime('now')
-        WHERE equipamento_id = ? AND tipo IN ('toner_baixo', 'toner_zerado') AND mensagem LIKE ? AND resolvido = 0
-      `).run(equipamentoId, `%${toner.tipo}%`);
+      await db.query(
+        `UPDATE alertas SET resolvido = 1, resolvido_em = (NOW() AT TIME ZONE 'UTC')::text
+         WHERE equipamento_id = $1 AND tipo IN ('toner_baixo', 'toner_zerado') AND mensagem LIKE $2 AND resolvido = 0`,
+        [equipamentoId, `%${toner.tipo}%`]
+      );
     }
   }
 
   if (leitura.mensagens_erro && leitura.mensagens_erro !== '0') {
-    const existing = db.prepare(`
-      SELECT id FROM alertas
-      WHERE equipamento_id = ? AND tipo = 'erro_critico' AND resolvido = 0
-    `).get(equipamentoId);
+    const existingResult = await db.query(
+      `SELECT id FROM alertas
+       WHERE equipamento_id = $1 AND tipo = 'erro_critico' AND resolvido = 0`,
+      [equipamentoId]
+    );
 
-    if (!existing) {
-      db.prepare(`
-        INSERT INTO alertas (equipamento_id, tipo, mensagem, nivel)
-        VALUES (?, 'erro_critico', ?, 'critical')
-      `).run(equipamentoId, `Erro crítico no equipamento ${leitura.nome_equip || equipamentoId}: ${leitura.mensagens_erro}`);
+    if (!existingResult.rows[0]) {
+      await db.query(
+        `INSERT INTO alertas (equipamento_id, tipo, mensagem, nivel)
+         VALUES ($1, 'erro_critico', $2, 'critical')`,
+        [equipamentoId, `Erro crítico no equipamento ${leitura.nome_equip || equipamentoId}: ${leitura.mensagens_erro}`]
+      );
     }
   }
 }
@@ -214,25 +230,30 @@ export async function runCollection(equipamentoId?: number): Promise<{ success: 
   let collected = 0;
   let errors = 0;
 
-  const query = equipamentoId
-    ? 'SELECT id FROM equipamentos WHERE id = ? AND status_monitoramento = ?'
-    : 'SELECT id FROM equipamentos WHERE status_monitoramento = ?';
-  const params = equipamentoId ? [equipamentoId, 'ativo'] : ['ativo'];
+  let query = 'SELECT id FROM equipamentos WHERE status_monitoramento = $1';
+  let params: any[] = ['ativo'];
 
-  const equipamentos = db.prepare(query).all(...params) as Array<{ id: number }>;
+  if (equipamentoId) {
+    query = 'SELECT id FROM equipamentos WHERE id = $1 AND status_monitoramento = $2';
+    params = [equipamentoId, 'ativo'];
+  }
+
+  const result = await db.query(query, params);
+  const equipamentos = result.rows;
 
   for (const equip of equipamentos) {
     try {
       const leituraData = await collectEquipmentData(equip.id);
       if (leituraData) {
-        saveLeitura(leituraData);
-        updateSuprimentos(equip.id, leituraData);
-        generateAlertas(equip.id, leituraData);
+        await saveLeitura(leituraData);
+        await updateSuprimentos(equip.id, leituraData);
+        await generateAlertas(equip.id, leituraData);
 
-        db.prepare(`
-          UPDATE config_coleta SET ultima_coleta = datetime('now')
-          WHERE equipamento_id = ?
-        `).run(equip.id);
+        await db.query(
+          `UPDATE config_coleta SET ultima_coleta = (NOW() AT TIME ZONE 'UTC')::text
+           WHERE equipamento_id = $1`,
+          [equip.id]
+        );
 
         collected++;
       }
@@ -282,12 +303,10 @@ export function unscheduleEquipment(equipamentoId: number): void {
   }
 }
 
-export function startScheduler(): void {
+export async function startScheduler(): Promise<void> {
   const db = getDb();
-  const configs = db.prepare('SELECT * FROM config_coleta WHERE ativo = 1').all() as Array<{
-    equipamento_id: number;
-    intervalo: string;
-  }>;
+  const result = await db.query('SELECT * FROM config_coleta WHERE ativo = 1');
+  const configs = result.rows;
 
   for (const config of configs) {
     scheduleEquipment(config.equipamento_id, config.intervalo);
