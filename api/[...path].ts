@@ -113,17 +113,6 @@ export default {
       const { path, params } = parseUrl(request.url);
 
       if (path === '/health') return _json({ status: 'ok', timestamp: new Date().toISOString() });
-      if (path === '/debug') {
-        const hasBody = request.body !== null;
-        const method = request.method;
-        const url = request.url;
-        const contentType = request.headers.get('content-type');
-        let bodyText = '';
-        if (hasBody) {
-          try { bodyText = await request.clone().text(); } catch { bodyText = 'error reading'; }
-        }
-        return _json({ method, url, contentType, hasBody, bodyLength: bodyText.length, bodyPreview: bodyText.substring(0, 500) });
-      }
       if (path.startsWith('/auth')) return handleAuth(request, path, params);
       if (path.startsWith('/equipamentos')) return handleEquipamentos(request, path, params);
       if (path.startsWith('/leituras')) return handleLeituras(request, path, params);
