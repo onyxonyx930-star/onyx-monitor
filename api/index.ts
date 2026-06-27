@@ -101,33 +101,64 @@ function isPrivateIP(ip: string): boolean {
   return parts[0] === 10 || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) || (parts[0] === 192 && parts[1] === 168) || parts[0] === 127 || parts[0] === 0;
 }
 
-export default {
-  async fetch(request: Request): Promise<Response> {
-    try {
-      await loadDeps();
+export default async function handler(nodeReq: any, nodeRes: any) {
+  try {
+    await loadDeps();
 
-      if (request.method === 'OPTIONS') {
-        return new Response(null, { status: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type' } });
-      }
-
-      const { path, params } = parseUrl(request.url);
-
-      if (path === '/health') return _json({ status: 'ok', timestamp: new Date().toISOString() });
-      if (path.startsWith('/auth')) return handleAuth(request, path, params);
-      if (path.startsWith('/equipamentos')) return handleEquipamentos(request, path, params);
-      if (path.startsWith('/leituras')) return handleLeituras(request, path, params);
-      if (path.startsWith('/suprimentos')) return handleSuprimentos(request, path, params);
-      if (path.startsWith('/alertas')) return handleAlertas(request, path, params);
-      if (path.startsWith('/relatorios')) return handleRelatorios(request, path, params);
-      if (path.startsWith('/agents')) return handleAgents(request, path, params);
-      if (path.startsWith('/auditoria')) return handleAuditoria(request, path, params);
-      return _error('Rota não encontrada', 404);
-    } catch (e: any) {
-      console.error('API Error:', e?.stack || e?.message || e);
-      return _json({ success: false, message: e?.message || 'Erro interno' }, 500);
+    if (nodeReq.method === 'OPTIONS') {
+      nodeRes.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type' });
+      return nodeRes.end();
     }
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of nodeReq) {
+      chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+    }
+    const bodyStr = Buffer.concat(chunks).toString('utf-8');
+
+    const proto = nodeReq.headers['x-forwarded-proto'] || 'https';
+    const host = nodeReq.headers.host || 'localhost';
+    const url = `${proto}://${host}${nodeReq.url}`;
+
+    const headers = new Headers();
+    for (const [key, value] of Object.entries(nodeReq.headers)) {
+      if (value) headers.set(key, Array.isArray(value) ? value.join(', ') : String(value));
+    }
+
+    const request = new Request(url, {
+      method: nodeReq.method,
+      headers,
+      body: bodyStr || undefined,
+    });
+
+    const response = await handleRequest(request);
+
+    const resBody = await response.text();
+    const resHeaders: Record<string, string> = {};
+    response.headers.forEach((v, k) => { resHeaders[k] = v; });
+    nodeRes.writeHead(response.status, resHeaders);
+    nodeRes.end(resBody);
+  } catch (e: any) {
+    console.error('API Error:', e?.stack || e?.message || e);
+    nodeRes.writeHead(500, { 'Content-Type': 'application/json' });
+    nodeRes.end(JSON.stringify({ success: false, message: e?.message || 'Erro interno' }));
   }
-};
+}
+
+async function handleRequest(request: Request): Promise<Response> {
+  const { path, params } = parseUrl(request.url);
+
+  if (path === '/health') return _json({ status: 'ok', timestamp: new Date().toISOString() });
+  if (path.startsWith('/auth')) return handleAuth(request, path, params);
+  if (path.startsWith('/equipamentos')) return handleEquipamentos(request, path, params);
+  if (path.startsWith('/leituras')) return handleLeituras(request, path, params);
+  if (path.startsWith('/suprimentos')) return handleSuprimentos(request, path, params);
+  if (path.startsWith('/alertas')) return handleAlertas(request, path, params);
+  if (path.startsWith('/relatorios')) return handleRelatorios(request, path, params);
+  if (path.startsWith('/agents')) return handleAgents(request, path, params);
+  if (path.startsWith('/auditoria')) return handleAuditoria(request, path, params);
+  return _error('Rota não encontrada', 404);
+}
 
 // ======================== AUTH ========================
 async function handleAuth(req: Request, path: string, params: Record<string, string>) {
