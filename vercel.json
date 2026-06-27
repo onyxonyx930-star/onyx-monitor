@@ -8,17 +8,22 @@
     "api/index.ts": {
       "maxDuration": 30
     },
-    "api/health.ts": {
-      "maxDuration": 5
-    },
     "api/cron/collect.ts": {
       "maxDuration": 30
     }
   },
   "rewrites": [
     {
+      "source": "/api/cron/collect",
+      "destination": "/api/cron/collect"
+    },
+    {
       "source": "/api/:path+",
       "destination": "/api"
+    },
+    {
+      "source": "/((?!assets/|api/).*)",
+      "destination": "/index.html"
     }
   ],
   "crons": [
