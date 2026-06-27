@@ -11,6 +11,7 @@ interface LayoutProps {
 const navigation = [
   { name: 'Dashboard', href: '/', icon: '📊' },
   { name: 'Equipamentos', href: '/equipamentos', icon: '🖨️' },
+  { name: 'Agents', href: '/agents', icon: '🤖' },
   { name: 'Suprimentos', href: '/suprimentos', icon: '📦' },
   { name: 'Alertas', href: '/alertas', icon: '🔔' },
   { name: 'Relatórios', href: '/relatorios', icon: '📋' },
@@ -20,6 +21,7 @@ const navigation = [
 const pageTitles: Record<string, string> = {
   '/': 'Dashboard',
   '/equipamentos': 'Equipamentos',
+  '/agents': 'Agents',
   '/suprimentos': 'Suprimentos',
   '/alertas': 'Alertas',
   '/relatorios': 'Relatórios',
@@ -47,13 +49,16 @@ export default function Layout({ children, onLogout }: LayoutProps) {
 
   useEffect(() => {
     getAlertasStats()
-      .then((data) => setAlertCount((data as any).ativos ?? data.pendentes ?? 0))
+      .then((data) => setAlertCount((data as any).ativos ?? 0))
       .catch(() => {})
   }, [])
 
   const getPageTitle = () => {
     if (location.pathname.startsWith('/equipamentos/')) {
       return 'Detalhes do Equipamento'
+    }
+    if (location.pathname.startsWith('/agents/')) {
+      return 'Detalhes do Agent'
     }
     return pageTitles[location.pathname] || 'Onyx Monitor'
   }

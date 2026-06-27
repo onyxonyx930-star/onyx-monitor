@@ -247,4 +247,50 @@ export async function exportPdf(params: Record<string, string>): Promise<Blob> {
   return response.blob()
 }
 
+// Agents
+export async function getAgents(): Promise<import('../types').Agent[]> {
+  return request<import('../types').Agent[]>('/agents')
+}
+
+export async function getAgent(id: number): Promise<import('../types').Agent> {
+  return request<import('../types').Agent>(`/agents/${id}`)
+}
+
+export async function createAgent(agent: Partial<import('../types').Agent>): Promise<import('../types').Agent> {
+  return request<import('../types').Agent>('/agents', {
+    method: 'POST',
+    body: JSON.stringify(agent),
+  })
+}
+
+export async function updateAgent(id: number, agent: Partial<import('../types').Agent>): Promise<import('../types').Agent> {
+  return request<import('../types').Agent>(`/agents/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(agent),
+  })
+}
+
+export async function deleteAgent(id: number): Promise<void> {
+  await request(`/agents/${id}`, { method: 'DELETE' })
+}
+
+export async function assignEquipmentToAgent(agentId: number, equipamentoId: number): Promise<void> {
+  await request(`/agents/${agentId}/assign`, {
+    method: 'POST',
+    body: JSON.stringify({ equipamento_id: equipamentoId }),
+  })
+}
+
+export async function unassignEquipmentFromAgent(agentId: number, equipamentoId: number): Promise<void> {
+  await request(`/agents/${agentId}/unassign`, {
+    method: 'POST',
+    body: JSON.stringify({ equipamento_id: equipamentoId }),
+  })
+}
+
+export async function getAgentLogs(agentId: number, level?: string): Promise<import('../types').AgentLog[]> {
+  const params = level ? `?level=${level}` : ''
+  return request<import('../types').AgentLog[]>(`/agents/${agentId}/logs${params}`)
+}
+
 export { ApiError, getToken, removeToken }

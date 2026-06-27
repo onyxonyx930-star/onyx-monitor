@@ -14,6 +14,9 @@ const Relatorios = lazy(() => import('./components/Relatorios/Relatorios'))
 const Configuracoes = lazy(() => import('./components/Configuracoes'))
 const Login = lazy(() => import('./components/Login'))
 const FormEquipamento = lazy(() => import('./components/Equipamentos/FormEquipamento'))
+const ListaAgents = lazy(() => import('./components/Agents/ListaAgents'))
+const DetalhesAgent = lazy(() => import('./components/Agents/DetalhesAgent'))
+const FormAgent = lazy(() => import('./components/Agents/FormAgent'))
 
 function PrivateRoute({ children, isAuthenticated }: { children: React.ReactNode; isAuthenticated: boolean }) {
   if (!isAuthenticated) {
@@ -149,6 +152,36 @@ export default function App() {
               <PrivateRoute isAuthenticated={isAuthenticated}>
                 <Layout onLogout={handleLogout}>
                   <Configuracoes />
+                </Layout>
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="/agents"
+            element={
+              <PrivateRoute isAuthenticated={isAuthenticated}>
+                <Layout onLogout={handleLogout}>
+                  <ListaAgents />
+                </Layout>
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="/agents/novo"
+            element={
+              <PrivateRoute isAuthenticated={isAuthenticated}>
+                <Layout onLogout={handleLogout}>
+                  <FormAgent />
+                </Layout>
+              </PrivateRoute>
+            }
+          />
+          <Route
+            path="/agents/:id"
+            element={
+              <PrivateRoute isAuthenticated={isAuthenticated}>
+                <Layout onLogout={handleLogout}>
+                  <DetalhesAgent />
                 </Layout>
               </PrivateRoute>
             }

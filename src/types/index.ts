@@ -132,3 +132,53 @@ export type FiltrosAlerta = {
   resolvido?: boolean
   equipamento_id?: number
 }
+
+export interface Agent {
+  id: number
+  name: string
+  company_id: string
+  location: string
+  ip_address: string
+  api_key: string
+  status: 'active' | 'inactive' | 'offline'
+  version: string
+  last_heartbeat: string
+  config: Record<string, unknown>
+  created_at: string
+  updated_at: string
+  printers_count?: number
+  errors_24h?: number
+  equipamentos?: Equipamento[]
+  logs?: AgentLog[]
+}
+
+export interface AgentLog {
+  id: number
+  agent_id: number
+  level: 'info' | 'warning' | 'error'
+  message: string
+  details: Record<string, unknown>
+  created_at: string
+}
+
+export interface AgentCollectData {
+  ip: string
+  nome: string
+  numero_serie: string
+  modelo: string
+  fabricante?: string
+  cliente?: string
+  status_online: boolean
+  contadores: {
+    total: number
+    pb: number
+    cor: number
+  }
+  toner: {
+    preto: number
+    ciano: number
+    magenta: number
+    amarelo: number
+  }
+  mensagens_erro: string
+}

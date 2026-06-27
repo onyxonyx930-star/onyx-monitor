@@ -8,6 +8,7 @@ import suprimentosRouter from './routes/suprimentos';
 import alertasRouter from './routes/alertas';
 import relatoriosRouter from './routes/relatorios';
 import authRouter from './routes/auth';
+import agentsRouter from './routes/agents';
 import { authMiddleware } from './routes/auth';
 
 const app = express();
@@ -17,10 +18,11 @@ app.use(cors({
   origin: true,
   credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 app.use('/api/auth', authRouter);
+app.use('/api/agents', agentsRouter);
 
 app.use('/api/equipamentos', authMiddleware, equipamentosRouter);
 app.use('/api/leituras', authMiddleware, leiturasRouter);

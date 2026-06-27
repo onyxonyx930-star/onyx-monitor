@@ -109,15 +109,6 @@ export default function Alertas() {
     })
   }, [])
 
-  const toggleSelectAll = useCallback(() => {
-    const unresolved = filtered.map((a) => a.id)
-    if (selectedIds.size === unresolved.length) {
-      setSelectedIds(new Set())
-    } else {
-      setSelectedIds(new Set(unresolved))
-    }
-  }, [filtered, selectedIds])
-
   const filtered = useMemo(() => {
     let result = alertas
     if (searchEquipamento) {
@@ -132,6 +123,15 @@ export default function Alertas() {
     }
     return result
   }, [alertas, searchEquipamento])
+
+  const toggleSelectAll = useCallback(() => {
+    const unresolved = filtered.map((a) => a.id)
+    if (selectedIds.size === unresolved.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(unresolved))
+    }
+  }, [filtered, selectedIds])
 
   const stats = useMemo(() => {
     const total = alertas.length
