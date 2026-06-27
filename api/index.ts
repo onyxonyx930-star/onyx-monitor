@@ -1,4 +1,4 @@
-import { query, getDb } from './_lib/db.js';
+﻿import { query, getDb } from './_lib/db.js';
 import { hashPassword, signToken, requireAuth, requireAdmin } from './_lib/auth.js';
 
 function json(data: any, status = 200) {
@@ -34,40 +34,49 @@ function getSegment(path: string, index: number): string | undefined {
   return path.split('/')[index + 1];
 }
 
-export default async function handler(req: Request): Promise<Response> {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type' } });
-  }
-
-  const { path, params } = parseUrl(req.url);
-
-  try {
-    if (path === '/health') return json({ status: 'ok', timestamp: new Date().toISOString() });
-    if (path.startsWith('/auth')) return handleAuth(req, path, params);
-    if (path.startsWith('/equipamentos')) return handleEquipamentos(req, path, params);
-    if (path.startsWith('/leituras')) return handleLeituras(req, path, params);
-    if (path.startsWith('/suprimentos')) return handleSuprimentos(req, path, params);
-    if (path.startsWith('/alertas')) return handleAlertas(req, path, params);
-    if (path.startsWith('/relatorios')) return handleRelatorios(req, path, params);
-    if (path.startsWith('/agents')) return handleAgents(req, path, params);
-    if (path.startsWith('/auditoria')) return handleAuditoria(req, path, params);
-    return error('Rota não encontrada', 404);
-  } catch (e: any) {
-    console.error('API Error:', e);
-    return error(e?.message || 'Erro interno', 500);
-  }
+async function readBody(req: Request | any): Promise<any> {
+  if (typeof req.json === 'function') return readBody(req);
+  if (typeof req.body === 'object') return req.body;
+  const text = typeof req.text === 'function' ? await req.text() : await new Response(req).text();
+  return text ? JSON.parse(text) : {};
 }
+
+export default {
+  async fetch(request: Request): Promise<Response> {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type' } });
+    }
+
+    const { path, params } = parseUrl(request.url);
+
+    try {
+      if (path === '/health') return json({ status: 'ok', timestamp: new Date().toISOString() });
+      if (path.startsWith('/auth')) return handleAuth(request, path, params);
+      if (path.startsWith('/equipamentos')) return handleEquipamentos(request, path, params);
+      if (path.startsWith('/leituras')) return handleLeituras(request, path, params);
+      if (path.startsWith('/suprimentos')) return handleSuprimentos(request, path, params);
+      if (path.startsWith('/alertas')) return handleAlertas(request, path, params);
+      if (path.startsWith('/relatorios')) return handleRelatorios(request, path, params);
+      if (path.startsWith('/agents')) return handleAgents(request, path, params);
+      if (path.startsWith('/auditoria')) return handleAuditoria(request, path, params);
+      return error('Rota nÃ£o encontrada', 404);
+    } catch (e: any) {
+      console.error('API Error:', e);
+      return error(e?.message || 'Erro interno', 500);
+    }
+  }
+};
 
 // ======================== AUTH ========================
 async function handleAuth(req: Request, path: string, params: Record<string, string>) {
   if (path === '/auth/login' && req.method === 'POST') {
-    const body = await req.json() as any;
+    const body = await readBody(req) as any;
     const { email, senha } = body;
-    if (!email || !senha) return error('Email e senha são obrigatórios', 400);
+    if (!email || !senha) return error('Email e senha sÃ£o obrigatÃ³rios', 400);
 
     const result = await query('SELECT * FROM usuarios WHERE email = $1 AND ativo = 1', [email]);
     const user = result.rows[0];
-    if (!user || hashPassword(senha) !== user.senha_hash) return error('Credenciais inválidas', 401);
+    if (!user || hashPassword(senha) !== user.senha_hash) return error('Credenciais invÃ¡lidas', 401);
 
     const token = signToken({ userId: user.id, email: user.email, role: user.role });
     return json({ success: true, data: { token, user: { id: user.id, nome: user.nome, email: user.email, role: user.role } } });
@@ -89,19 +98,19 @@ async function handleAuth(req: Request, path: string, params: Record<string, str
   if (path === '/auth/usuarios' && req.method === 'POST') {
     const admin = await requireAdmin(req);
     if (admin.error) return admin.error;
-    const body = await req.json() as any;
+    const body = await readBody(req) as any;
     const { nome, email, senha, role, cliente_id } = body;
-    if (!nome || !email || !senha) return error('Nome, email e senha são obrigatórios', 400);
+    if (!nome || !email || !senha) return error('Nome, email e senha sÃ£o obrigatÃ³rios', 400);
     const existing = await query('SELECT id FROM usuarios WHERE email = $1', [email]);
-    if (existing.rows[0]) return error('Já existe um usuário com este email', 409);
+    if (existing.rows[0]) return error('JÃ¡ existe um usuÃ¡rio com este email', 409);
     const result = await query(
       `INSERT INTO usuarios (nome, email, senha_hash, role, cliente_id, ativo) VALUES ($1,$2,$3,$4,$5,1) RETURNING id, nome, email, role, cliente_id, ativo, created_at`,
       [nome, email, hashPassword(senha), role || 'cliente', cliente_id || null]
     );
-    return json({ success: true, data: result.rows[0], message: 'Usuário criado com sucesso' }, 201);
+    return json({ success: true, data: result.rows[0], message: 'UsuÃ¡rio criado com sucesso' }, 201);
   }
 
-  return error('Rota de auth não encontrada', 404);
+  return error('Rota de auth nÃ£o encontrada', 404);
 }
 
 // ======================== EQUIPAMENTOS ========================
@@ -149,7 +158,7 @@ async function handleEquipamentos(req: Request, path: string, params: Record<str
   if (path.match(/^\/equipamentos\/\d+$/) && req.method === 'GET') {
     const id = getSegment(path, 1);
     const equip = (await query('SELECT * FROM equipamentos WHERE id=$1', [id])).rows[0];
-    if (!equip) return error('Equipamento não encontrado', 404);
+    if (!equip) return error('Equipamento nÃ£o encontrado', 404);
     const leitura = (await query('SELECT * FROM leituras WHERE equipamento_id=$1 ORDER BY data_leitura DESC LIMIT 1', [id])).rows[0];
     const suprimentos = (await query('SELECT * FROM suprimentos WHERE equipamento_id=$1', [id])).rows;
     const config = (await query('SELECT * FROM config_coleta WHERE equipamento_id=$1', [id])).rows[0];
@@ -157,9 +166,9 @@ async function handleEquipamentos(req: Request, path: string, params: Record<str
   }
 
   if (path === '/equipamentos' && req.method === 'POST') {
-    const body = await req.json() as any;
+    const body = await readBody(req) as any;
     const { cliente, unidade, ip, comunidade_snmp, fabricante, modelo, numero_serie, localizacao, contrato, status_monitoramento } = body;
-    if (!cliente || !ip) return error('Cliente e IP são obrigatórios', 400);
+    if (!cliente || !ip) return error('Cliente e IP sÃ£o obrigatÃ³rios', 400);
     const result = await query(
       `INSERT INTO equipamentos (cliente, unidade, ip, comunidade_snmp, fabricante, modelo, numero_serie, localizacao, contrato, status_monitoramento) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [cliente, unidade||null, ip, comunidade_snmp||'public', fabricante||null, modelo||null, numero_serie||null, localizacao||null, contrato||null, status_monitoramento||'ativo']
@@ -169,9 +178,9 @@ async function handleEquipamentos(req: Request, path: string, params: Record<str
 
   if (path.match(/^\/equipamentos\/\d+$/) && req.method === 'PUT') {
     const id = getSegment(path, 1);
-    const body = await req.json() as any;
+    const body = await readBody(req) as any;
     const existing = (await query('SELECT * FROM equipamentos WHERE id=$1', [id])).rows[0];
-    if (!existing) return error('Equipamento não encontrado', 404);
+    if (!existing) return error('Equipamento nÃ£o encontrado', 404);
     const result = await query(
       `UPDATE equipamentos SET cliente=$1, unidade=$2, ip=$3, comunidade_snmp=$4, fabricante=$5, modelo=$6, numero_serie=$7, localizacao=$8, contrato=$9, status_monitoramento=$10, updated_at=(NOW() AT TIME ZONE 'UTC')::text WHERE id=$11 RETURNING *`,
       [body.cliente||existing.cliente, body.unidade||existing.unidade, body.ip||existing.ip, body.comunidade_snmp||existing.comunidade_snmp, body.fabricante||existing.fabricante, body.modelo||existing.modelo, body.numero_serie||existing.numero_serie, body.localizacao||existing.localizacao, body.contrato||existing.contrato, body.status_monitoramento||existing.status_monitoramento, id]
@@ -182,21 +191,21 @@ async function handleEquipamentos(req: Request, path: string, params: Record<str
   if (path.match(/^\/equipamentos\/\d+$/) && req.method === 'DELETE') {
     const id = getSegment(path, 1);
     const existing = (await query('SELECT * FROM equipamentos WHERE id=$1', [id])).rows[0];
-    if (!existing) return error('Equipamento não encontrado', 404);
+    if (!existing) return error('Equipamento nÃ£o encontrado', 404);
     await query('DELETE FROM equipamentos WHERE id=$1', [id]);
-    return json({ success: true, message: 'Equipamento excluído com sucesso' });
+    return json({ success: true, message: 'Equipamento excluÃ­do com sucesso' });
   }
 
   if (path.match(/^\/equipamentos\/\d+\/collect$/) && req.method === 'POST') {
     const id = parseInt(getSegment(path, 1));
     const equip = (await query('SELECT * FROM equipamentos WHERE id=$1', [id])).rows[0];
-    if (!equip) return error('Equipamento não encontrado', 404);
+    if (!equip) return error('Equipamento nÃ£o encontrado', 404);
 
     if (isPrivateIP(equip.ip)) {
       const agent = (await query(`SELECT a.id, a.name, a.status, a.last_heartbeat FROM agents a WHERE a.id=$1 AND a.status='active'`, [equip.agent_id])).rows[0];
-      if (!agent) return json({ success: false, data: { reason: 'private_ip_no_agent', ip: equip.ip, hint: 'Instale um Onyx Agent na rede do cliente.', agent_required: true }, message: 'IP privado. Não é possível coletar diretamente.' }, 400);
+      if (!agent) return json({ success: false, data: { reason: 'private_ip_no_agent', ip: equip.ip, hint: 'Instale um Onyx Agent na rede do cliente.', agent_required: true }, message: 'IP privado. NÃ£o Ã© possÃ­vel coletar diretamente.' }, 400);
       const lastHb = agent.last_heartbeat ? new Date(agent.last_heartbeat).getTime() : 0;
-      if (lastHb < Date.now() - 10*60*1000) return json({ success: false, data: { reason: 'agent_offline', agent_name: agent.name, last_heartbeat: agent.last_heartbeat, hint: 'Verifique se o Agent está rodando.' }, message: `Agent "${agent.name}" parece estar offline.` }, 400);
+      if (lastHb < Date.now() - 10*60*1000) return json({ success: false, data: { reason: 'agent_offline', agent_name: agent.name, last_heartbeat: agent.last_heartbeat, hint: 'Verifique se o Agent estÃ¡ rodando.' }, message: `Agent "${agent.name}" parece estar offline.` }, 400);
       await query(`INSERT INTO agent_logs (agent_id, level, message, details) VALUES ($1,'info',$2,$3)`, [agent.id, `Coleta solicitada para ${equip.ip}`, JSON.stringify({ equipamento_id: equip.id, requested_by: 'web_ui' })]);
       return json({ success: true, data: { reason: 'routed_to_agent', agent_id: agent.id, agent_name: agent.name }, message: `Coleta enviada ao Agent "${agent.name}".` });
     }
@@ -216,7 +225,7 @@ async function handleEquipamentos(req: Request, path: string, params: Record<str
     return json({ success: true, data: printerData, message: 'Coleta realizada com sucesso' });
   }
 
-  return error('Rota de equipamentos não encontrada', 404);
+  return error('Rota de equipamentos nÃ£o encontrada', 404);
 }
 
 // ======================== LEITURAS ========================
@@ -251,11 +260,11 @@ async function handleLeituras(req: Request, path: string, params: Record<string,
   if (path.match(/^\/leituras\/\d+$/) && req.method === 'GET') {
     const id = getSegment(path, 1);
     const result = await query(`SELECT l.*, e.cliente, e.modelo, e.numero_serie, e.ip FROM leituras l LEFT JOIN equipamentos e ON l.equipamento_id=e.id WHERE l.id=$1`,[id]);
-    if (!result.rows[0]) return error('Leitura não encontrada', 404);
+    if (!result.rows[0]) return error('Leitura nÃ£o encontrada', 404);
     return json({ success: true, data: result.rows[0] });
   }
 
-  return error('Rota de leituras não encontrada', 404);
+  return error('Rota de leituras nÃ£o encontrada', 404);
 }
 
 // ======================== SUPRIMENTOS ========================
@@ -279,15 +288,15 @@ async function handleSuprimentos(req: Request, path: string, params: Record<stri
 
   if (path.match(/^\/suprimentos\/\d+$/) && req.method === 'PUT') {
     const id = getSegment(path, 1);
-    const body = await req.json() as any;
+    const body = await readBody(req) as any;
     const existing = (await query('SELECT * FROM suprimentos WHERE id=$1',[id])).rows[0];
-    if (!existing) return error('Suprimento não encontrado', 404);
+    if (!existing) return error('Suprimento nÃ£o encontrado', 404);
     const result = await query(`UPDATE suprimentos SET percentual=$1, previsao_troca=$2, updated_at=(NOW() AT TIME ZONE 'UTC')::text WHERE id=$3 RETURNING *`,
       [body.percentual!==undefined?body.percentual:existing.percentual, body.previsao_troca!==undefined?body.previsao_troca:existing.previsao_troca, id]);
     return json({ success: true, data: result.rows[0], message: 'Suprimento atualizado com sucesso' });
   }
 
-  return error('Rota de suprimentos não encontrada', 404);
+  return error('Rota de suprimentos nÃ£o encontrada', 404);
 }
 
 // ======================== ALERTAS ========================
@@ -324,12 +333,12 @@ async function handleAlertas(req: Request, path: string, params: Record<string, 
   if (path.match(/^\/alertas\/\d+\/resolver$/) && req.method === 'PUT') {
     const id = getSegment(path, 1);
     const existing = (await query('SELECT * FROM alertas WHERE id=$1',[id])).rows[0];
-    if (!existing) return error('Alerta não encontrado', 404);
+    if (!existing) return error('Alerta nÃ£o encontrado', 404);
     const result = await query(`UPDATE alertas SET resolvido=1, resolvido_em=(NOW() AT TIME ZONE 'UTC')::text WHERE id=$1 RETURNING *`,[id]);
     return json({ success: true, data: result.rows[0], message: 'Alerta resolvido com sucesso' });
   }
 
-  return error('Rota de alertas não encontrada', 404);
+  return error('Rota de alertas nÃ£o encontrada', 404);
 }
 
 // ======================== RELATORIOS ========================
@@ -368,15 +377,15 @@ async function handleRelatorios(req: Request, path: string, params: Record<strin
     return new Response(Buffer.from(csvRows.join('\n'),'utf-8'), { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename=relatorio_onyx.csv' } });
   }
 
-  return error('Rota de relatórios não encontrada', 404);
+  return error('Rota de relatÃ³rios nÃ£o encontrada', 404);
 }
 
 // ======================== AGENTS ========================
 async function handleAgents(req: Request, path: string, params: Record<string, string>) {
   if (path === '/agents/register' && req.method === 'POST') {
-    const body = await req.json() as any;
+    const body = await readBody(req) as any;
     const { name, company_id, location, ip_address, version } = body;
-    if (!name || !company_id) return error('Nome e company_id são obrigatórios', 400);
+    if (!name || !company_id) return error('Nome e company_id sÃ£o obrigatÃ³rios', 400);
     const crypto = await import('crypto');
     const apiKey = crypto.randomBytes(32).toString('hex');
     const result = await query(
@@ -390,16 +399,16 @@ async function handleAgents(req: Request, path: string, params: Record<string, s
   const agentMatch = path.match(/^\/agents\/(\d+)\/(heartbeat|config|collect|logs)$/);
   if (agentMatch) {
     const authHeader = req.headers.get('authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) return error('Token não fornecido', 401);
+    if (!authHeader || !authHeader.startsWith('Bearer ')) return error('Token nÃ£o fornecido', 401);
     const apiKey = authHeader.split(' ')[1];
     const agent = (await query('SELECT id, name, status FROM agents WHERE api_key=$1',[apiKey])).rows[0];
-    if (!agent) return error('API Key inválida', 401);
+    if (!agent) return error('API Key invÃ¡lida', 401);
     if (agent.status !== 'active') return error('Agent inativo', 403);
 
     const [, agentId, action] = agentMatch;
 
     if (action === 'heartbeat' && req.method === 'POST') {
-      const body = await req.json() as any;
+      const body = await readBody(req) as any;
       await query(`UPDATE agents SET last_heartbeat=(NOW() AT TIME ZONE 'UTC')::text, version=COALESCE($1,version), updated_at=(NOW() AT TIME ZONE 'UTC')::text WHERE id=$2`,[body.version||null,agentId]);
       return json({ success: true, message: 'Heartbeat registrado' });
     }
@@ -410,8 +419,8 @@ async function handleAgents(req: Request, path: string, params: Record<string, s
     }
 
     if (action === 'collect' && req.method === 'POST') {
-      const body = await req.json() as any;
-      if (!body.equipamentos || !Array.isArray(body.equipamentos)) return error('Dados inválidos', 400);
+      const body = await readBody(req) as any;
+      if (!body.equipamentos || !Array.isArray(body.equipamentos)) return error('Dados invÃ¡lidos', 400);
       let processed = 0, errors = 0;
       for (const equip of body.equipamentos) {
         try {
@@ -432,14 +441,14 @@ async function handleAgents(req: Request, path: string, params: Record<string, s
           }
           if (!equip.status_online) {
             const exAlert = (await query(`SELECT id FROM alertas WHERE equipamento_id=$1 AND tipo='offline' AND resolvido=0`,[eid])).rows[0];
-            if (!exAlert) await query(`INSERT INTO alertas (equipamento_id,tipo,mensagem,nivel) VALUES ($1,'offline',$2,'critical')`,[eid,`Equipamento ${equip.nome||equip.ip} está offline`]);
+            if (!exAlert) await query(`INSERT INTO alertas (equipamento_id,tipo,mensagem,nivel) VALUES ($1,'offline',$2,'critical')`,[eid,`Equipamento ${equip.nome||equip.ip} estÃ¡ offline`]);
           } else {
             await query(`UPDATE alertas SET resolvido=1, resolvido_em=(NOW() AT TIME ZONE 'UTC')::text WHERE equipamento_id=$1 AND tipo='offline' AND resolvido=0`,[eid]);
           }
           for (const toner of toners) {
             if (toner.p === 0) {
               const ex = (await query(`SELECT id FROM alertas WHERE equipamento_id=$1 AND tipo='toner_zerado' AND mensagem LIKE $2 AND resolvido=0`,[eid,`%${toner.t}%`])).rows[0];
-              if (!ex) await query(`INSERT INTO alertas (equipamento_id,tipo,mensagem,nivel) VALUES ($1,'toner_zerado',$2,'critical')`,[eid,`Toner ${toner.t} está zerado no equipamento ${equip.nome||equip.ip}`]);
+              if (!ex) await query(`INSERT INTO alertas (equipamento_id,tipo,mensagem,nivel) VALUES ($1,'toner_zerado',$2,'critical')`,[eid,`Toner ${toner.t} estÃ¡ zerado no equipamento ${equip.nome||equip.ip}`]);
             } else if (toner.p <= 15) {
               const ex = (await query(`SELECT id FROM alertas WHERE equipamento_id=$1 AND tipo='toner_baixo' AND mensagem LIKE $2 AND resolvido=0`,[eid,`%${toner.t}%`])).rows[0];
               if (!ex) await query(`INSERT INTO alertas (equipamento_id,tipo,mensagem,nivel) VALUES ($1,'toner_baixo',$2,'warning')`,[eid,`Toner ${toner.t} com ${toner.p}% no equipamento ${equip.nome||equip.ip}`]);
@@ -454,8 +463,8 @@ async function handleAgents(req: Request, path: string, params: Record<string, s
     }
 
     if (action === 'logs' && req.method === 'POST') {
-      const body = await req.json() as any;
-      if (!body.logs || !Array.isArray(body.logs)) return error('Logs inválidos', 400);
+      const body = await readBody(req) as any;
+      if (!body.logs || !Array.isArray(body.logs)) return error('Logs invÃ¡lidos', 400);
       for (const log of body.logs) {
         await query(`INSERT INTO agent_logs (agent_id,level,message,details) VALUES ($1,$2,$3,$4)`,[agentId,log.level||'info',log.message,log.details?JSON.stringify(log.details):null]);
       }
@@ -475,7 +484,7 @@ async function handleAgents(req: Request, path: string, params: Record<string, s
   if (path.match(/^\/agents\/\d+$/) && req.method === 'GET') {
     const id = getSegment(path, 1);
     const agent = (await query(`SELECT a.*, (SELECT COUNT(*) FROM equipamentos e WHERE e.agent_id=a.id) as printers_count FROM agents a WHERE a.id=$1`,[id])).rows[0];
-    if (!agent) return error('Agent não encontrado', 404);
+    if (!agent) return error('Agent nÃ£o encontrado', 404);
     const printers = (await query('SELECT id, cliente, ip, modelo, numero_serie, status_monitoramento FROM equipamentos WHERE agent_id=$1',[id])).rows;
     const logs = (await query('SELECT * FROM agent_logs WHERE agent_id=$1 ORDER BY created_at DESC LIMIT 50',[id])).rows;
     return json({ success: true, data: { ...agent, equipamentos: printers, logs } });
@@ -483,9 +492,9 @@ async function handleAgents(req: Request, path: string, params: Record<string, s
 
   if (path.match(/^\/agents\/\d+$/) && req.method === 'PUT') {
     const id = getSegment(path, 1);
-    const body = await req.json() as any;
+    const body = await readBody(req) as any;
     const existing = (await query('SELECT * FROM agents WHERE id=$1',[id])).rows[0];
-    if (!existing) return error('Agent não encontrado', 404);
+    if (!existing) return error('Agent nÃ£o encontrado', 404);
     const result = await query(`UPDATE agents SET name=$1, company_id=$2, location=$3, status=$4, config=$5, updated_at=(NOW() AT TIME ZONE 'UTC')::text WHERE id=$6 RETURNING *`,
       [body.name||existing.name, body.company_id||existing.company_id, body.location!==undefined?body.location:existing.location, body.status||existing.status, body.config?JSON.stringify(body.config):existing.config, id]);
     return json({ success: true, data: result.rows[0], message: 'Agent atualizado' });
@@ -494,33 +503,33 @@ async function handleAgents(req: Request, path: string, params: Record<string, s
   if (path.match(/^\/agents\/\d+$/) && req.method === 'DELETE') {
     const id = getSegment(path, 1);
     const existing = (await query('SELECT * FROM agents WHERE id=$1',[id])).rows[0];
-    if (!existing) return error('Agent não encontrado', 404);
+    if (!existing) return error('Agent nÃ£o encontrado', 404);
     await query('UPDATE equipamentos SET agent_id=NULL WHERE agent_id=$1',[id]);
     await query('DELETE FROM agents WHERE id=$1',[id]);
-    return json({ success: true, message: 'Agent excluído com sucesso' });
+    return json({ success: true, message: 'Agent excluÃ­do com sucesso' });
   }
 
   if (path.match(/^\/agents\/\d+\/assign$/) && req.method === 'POST') {
     const id = getSegment(path, 1);
-    const body = await req.json() as any;
-    if (!body.equipamento_id) return error('equipamento_id é obrigatório', 400);
+    const body = await readBody(req) as any;
+    if (!body.equipamento_id) return error('equipamento_id Ã© obrigatÃ³rio', 400);
     const agent = (await query('SELECT id FROM agents WHERE id=$1',[id])).rows[0];
-    if (!agent) return error('Agent não encontrado', 404);
+    if (!agent) return error('Agent nÃ£o encontrado', 404);
     const equip = (await query('SELECT id FROM equipamentos WHERE id=$1',[body.equipamento_id])).rows[0];
-    if (!equip) return error('Equipamento não encontrado', 404);
+    if (!equip) return error('Equipamento nÃ£o encontrado', 404);
     await query('UPDATE equipamentos SET agent_id=$1 WHERE id=$2',[id,body.equipamento_id]);
-    return json({ success: true, message: 'Equipamento atribuído ao agent' });
+    return json({ success: true, message: 'Equipamento atribuÃ­do ao agent' });
   }
 
   if (path.match(/^\/agents\/\d+\/unassign$/) && req.method === 'POST') {
     const id = getSegment(path, 1);
-    const body = await req.json() as any;
-    if (!body.equipamento_id) return error('equipamento_id é obrigatório', 400);
+    const body = await readBody(req) as any;
+    if (!body.equipamento_id) return error('equipamento_id Ã© obrigatÃ³rio', 400);
     await query('UPDATE equipamentos SET agent_id=NULL WHERE id=$1 AND agent_id=$2',[body.equipamento_id,id]);
     return json({ success: true, message: 'Equipamento removido do agent' });
   }
 
-  return error('Rota de agents não encontrada', 404);
+  return error('Rota de agents nÃ£o encontrada', 404);
 }
 
 // ======================== AUDITORIA ========================
@@ -559,8 +568,8 @@ async function handleAuditoria(req: Request, path: string, params: Record<string
     q += ' ORDER BY a.data_impressao DESC';
     const rows = (await query(q, p)).rows;
     if (!rows.length) return error('Nenhum dado encontrado', 404);
-    const headers = ['Usuário','Computador','Documento','Data','Hora','Equipamento','Cliente','Páginas','Colorida','Duplex','Papel','Status','Fonte'];
-    const csvRows = ['\uFEFF'+headers.join(';'), ...rows.map((r: any) => [r.usuario||'',r.computador||'',r.documento||'',r.data_impressao||'',r.hora_impressao||'',r.equipamento||'',r.cliente||'',r.total_paginas||0,r.colorida?'Sim':'Não',r.duplex?'Sim':'Não',r.tamanho_papel||'A4',r.status_impressao||'',r.fonte||''].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(';'))];
+    const headers = ['UsuÃ¡rio','Computador','Documento','Data','Hora','Equipamento','Cliente','PÃ¡ginas','Colorida','Duplex','Papel','Status','Fonte'];
+    const csvRows = ['\uFEFF'+headers.join(';'), ...rows.map((r: any) => [r.usuario||'',r.computador||'',r.documento||'',r.data_impressao||'',r.hora_impressao||'',r.equipamento||'',r.cliente||'',r.total_paginas||0,r.colorida?'Sim':'NÃ£o',r.duplex?'Sim':'NÃ£o',r.tamanho_papel||'A4',r.status_impressao||'',r.fonte||''].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(';'))];
     return new Response(Buffer.from(csvRows.join('\n'),'utf-8'), { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename=auditoria_impressoes.csv' } });
   }
 
@@ -584,7 +593,7 @@ async function handleAuditoria(req: Request, path: string, params: Record<string
   }
 
   if (path === '/auditoria' && req.method === 'POST') {
-    const body = await req.json() as any;
+    const body = await readBody(req) as any;
     const { equipamento_id, cliente, usuario, computador, documento, data_impressao, hora_impressao, total_paginas, colorida, duplex, tamanho_papel, status_impressao, fonte, dados_extras } = body;
     const result = await query(
       `INSERT INTO auditoria_impressoes (equipamento_id,cliente,usuario,computador,documento,data_impressao,hora_impressao,total_paginas,colorida,duplex,tamanho_papel,status_impressao,fonte,dados_extras) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
@@ -594,7 +603,7 @@ async function handleAuditoria(req: Request, path: string, params: Record<string
   }
 
   if (path === '/auditoria/batch' && req.method === 'POST') {
-    const body = await req.json() as any;
+    const body = await readBody(req) as any;
     if (!body.records || !Array.isArray(body.records) || !body.records.length) return error('Nenhum registro fornecido', 400);
     let inserted = 0;
     for (const rec of body.records) {
@@ -609,7 +618,7 @@ async function handleAuditoria(req: Request, path: string, params: Record<string
 
   if (path.match(/^\/auditoria\/\d+$/) && req.method === 'DELETE') {
     await query('DELETE FROM auditoria_impressoes WHERE id=$1',[getSegment(path,1)]);
-    return json({ success: true, message: 'Registro excluído' });
+    return json({ success: true, message: 'Registro excluÃ­do' });
   }
 
   if (path === '/auditoria/config' && req.method === 'GET') {
@@ -618,7 +627,7 @@ async function handleAuditoria(req: Request, path: string, params: Record<string
   }
 
   if (path === '/auditoria/config' && req.method === 'POST') {
-    const body = await req.json() as any;
+    const body = await readBody(req) as any;
     const result = await query(`INSERT INTO auditoria_config (tipo_integracao,equipamento_id,config,ativo) VALUES ($1,$2,$3,$4) RETURNING *`,
       [body.tipo_integracao, body.equipamento_id||null, JSON.stringify(body.config||{}), body.ativo!==undefined?(body.ativo?1:0):1]);
     return json({ success: true, data: result.rows[0] }, 201);
@@ -626,8 +635,8 @@ async function handleAuditoria(req: Request, path: string, params: Record<string
 
   if (path.match(/^\/auditoria\/config\/\d+$/) && req.method === 'DELETE') {
     await query('DELETE FROM auditoria_config WHERE id=$1',[getSegment(path,2)]);
-    return json({ success: true, message: 'Configuração excluída' });
+    return json({ success: true, message: 'ConfiguraÃ§Ã£o excluÃ­da' });
   }
 
-  return error('Rota de auditoria não encontrada', 404);
+  return error('Rota de auditoria nÃ£o encontrada', 404);
 }
