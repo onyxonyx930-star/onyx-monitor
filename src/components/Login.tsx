@@ -16,7 +16,7 @@ export default function Login({ onLogin }: LoginProps) {
     setLoading(true)
 
     try {
-      const BASE_URL = import.meta.env.VITE_API_URL || '/api'
+      const BASE_URL = import.meta.env.VITE_API_URL || 'https://onyx-monitor-api.onrender.com/api'
       const response = await fetch(`${BASE_URL}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
