@@ -5,13 +5,23 @@
   "outputDirectory": "dist",
   "framework": null,
   "functions": {
-    "api/[...path].ts": {
+    "api/index.ts": {
       "maxDuration": 30
     },
     "api/cron/collect.ts": {
       "maxDuration": 30
     }
   },
+  "rewrites": [
+    {
+      "source": "/api/cron/collect",
+      "destination": "/api/cron/collect"
+    },
+    {
+      "source": "/api/:path*",
+      "destination": "/api"
+    }
+  ],
   "crons": [
     {
       "path": "/api/cron/collect",
