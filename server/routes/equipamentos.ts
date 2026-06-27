@@ -116,7 +116,7 @@ router.get('/', (req: Request, res: Response) => {
     params.push(perPageNum, offset);
 
     const equipamentos = db.prepare(query).all(...params);
-    res.json({ success: true, data: equipamentos, total });
+    res.json({ success: true, data: { data: equipamentos, total } });
   } catch (error) {
     res.status(500).json({
       success: false,

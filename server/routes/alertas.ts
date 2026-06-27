@@ -97,13 +97,7 @@ router.get('/', (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      data: alertas,
-      pagination: {
-        page: Number(page),
-        limit: Number(limit),
-        total,
-        pages: Math.ceil(total / Number(limit)),
-      },
+      data: { data: alertas, total },
     });
   } catch (error) {
     res.status(500).json({

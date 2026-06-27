@@ -1,8 +1,9 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState, useCallback } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
 import Loading from './components/shared/Loading'
 import type { Equipamento } from './types'
+import { getToken, removeToken, getMe } from './services/api'
 
 const Dashboard = lazy(() => import('./components/Dashboard/Dashboard'))
 const ListaEquipamentos = lazy(() => import('./components/Equipamentos/ListaEquipamentos'))
@@ -26,21 +27,37 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true)
   const [showEquipamentoForm, setShowEquipamentoForm] = useState(false)
   const [editingEquipamento, setEditingEquipamento] = useState<Equipamento | null>(null)
+  const [equipamentoRefreshKey, setEquipamentoRefreshKey] = useState(0)
+
+  const validateToken = useCallback(async () => {
+    const token = getToken()
+    if (!token || token === 'authenticated') {
+      removeToken()
+      localStorage.removeItem('onyx_user')
+      setIsLoading(false)
+      return
+    }
+    try {
+      await getMe()
+      setIsAuthenticated(true)
+    } catch {
+      removeToken()
+      localStorage.removeItem('onyx_user')
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    const token = localStorage.getItem('onyx_token')
-    if (token) {
-      setIsAuthenticated(true)
-    }
-    setIsLoading(false)
-  }, [])
+    validateToken()
+  }, [validateToken])
 
   const handleLogin = () => {
     setIsAuthenticated(true)
   }
 
   const handleLogout = () => {
-    localStorage.removeItem('onyx_token')
+    removeToken()
     localStorage.removeItem('onyx_user')
     setIsAuthenticated(false)
   }
@@ -53,7 +70,9 @@ export default function App() {
     <BrowserRouter>
       <Suspense fallback={<Loading fullPage />}>
         <Routes>
-          <Route path="/login" element={<Login onLogin={handleLogin} />} />
+          <Route path="/login" element={
+            isAuthenticated ? <Navigate to="/" replace /> : <Login onLogin={handleLogin} />
+          } />
           <Route
             path="/"
             element={
@@ -70,6 +89,7 @@ export default function App() {
               <PrivateRoute isAuthenticated={isAuthenticated}>
                 <Layout onLogout={handleLogout}>
                   <ListaEquipamentos
+                    key={equipamentoRefreshKey}
                     onNovo={() => {
                       setEditingEquipamento(null)
                       setShowEquipamentoForm(true)
@@ -133,6 +153,7 @@ export default function App() {
               </PrivateRoute>
             }
           />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Suspense>
 
@@ -147,6 +168,7 @@ export default function App() {
             onSuccess={() => {
               setShowEquipamentoForm(false)
               setEditingEquipamento(null)
+              setEquipamentoRefreshKey((k) => k + 1)
             }}
           />
         </Suspense>

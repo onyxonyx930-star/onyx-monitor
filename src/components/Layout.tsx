@@ -1,6 +1,7 @@
-import { useState, Fragment, useMemo } from 'react'
-import { NavLink, useLocation } from 'react-router-dom'
+import { useState, useMemo, useEffect } from 'react'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import type { Usuario } from '../types'
+import { getAlertasStats } from '../services/api'
 
 interface LayoutProps {
   children: React.ReactNode
@@ -27,7 +28,9 @@ const pageTitles: Record<string, string> = {
 
 export default function Layout({ children, onLogout }: LayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [alertCount, setAlertCount] = useState(0)
   const location = useLocation()
+  const navigate = useNavigate()
 
   const user = useMemo(() => {
     try {
@@ -41,6 +44,12 @@ export default function Layout({ children, onLogout }: LayoutProps) {
   const userName = user?.nome || 'Admin'
   const userEmail = user?.email || 'admin@onyx.com'
   const initials = userName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()
+
+  useEffect(() => {
+    getAlertasStats()
+      .then((data) => setAlertCount((data as any).ativos ?? data.pendentes ?? 0))
+      .catch(() => {})
+  }, [])
 
   const getPageTitle = () => {
     if (location.pathname.startsWith('/equipamentos/')) {
@@ -92,6 +101,11 @@ export default function Layout({ children, onLogout }: LayoutProps) {
               >
                 <span className="text-lg">{item.icon}</span>
                 {item.name}
+                {item.href === '/alertas' && alertCount > 0 && (
+                  <span className="ml-auto px-2 py-0.5 text-[10px] font-bold bg-accent-red text-white rounded-full">
+                    {alertCount > 99 ? '99+' : alertCount}
+                  </span>
+                )}
               </NavLink>
             )
           })}
@@ -132,19 +146,16 @@ export default function Layout({ children, onLogout }: LayoutProps) {
           </div>
 
           <div className="flex items-center gap-4">
-            <div className="hidden md:flex items-center">
-              <input
-                type="text"
-                placeholder="Buscar..."
-                className="input-field w-64 text-sm py-2"
-              />
-            </div>
-
-            <button className="relative p-2 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-onyx-800/50 transition-colors">
+            <button
+              onClick={() => navigate('/alertas')}
+              className="relative p-2 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-onyx-800/50 transition-colors"
+            >
               <span className="text-lg">🔔</span>
-              <span className="absolute -top-0.5 -right-0.5 w-5 h-5 bg-accent-red rounded-full text-[10px] font-bold text-white flex items-center justify-center">
-                3
-              </span>
+              {alertCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 w-5 h-5 bg-accent-red rounded-full text-[10px] font-bold text-white flex items-center justify-center">
+                  {alertCount > 99 ? '99+' : alertCount}
+                </span>
+              )}
             </button>
 
             <div className="hidden sm:flex items-center gap-3 pl-4 border-l border-onyx-700/50">

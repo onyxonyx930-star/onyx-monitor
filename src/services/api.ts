@@ -203,7 +203,7 @@ export async function resolverAlerta(id: number): Promise<Alerta> {
   return request<Alerta>(`/alertas/${id}/resolve`, { method: 'PUT' })
 }
 
-export async function getAlertasStats(): Promise<{ total: number; criticos: number; pendentes: number }> {
+export async function getAlertasStats(): Promise<{ total: number; ativos: number; criticos: number; warnings: number; infos: number }> {
   return request('/alertas/stats')
 }
 

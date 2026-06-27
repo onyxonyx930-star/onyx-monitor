@@ -1,11 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import {
-  Printer,
   CheckCircle,
-  XCircle,
-  TriangleAlert,
-  AlertOctagon,
-  FileText,
   RefreshCw,
   ArrowRight,
 } from 'lucide-react'
@@ -27,35 +22,40 @@ export default function Dashboard() {
   const fetchData = useCallback(async () => {
     try {
       setError(null)
-      const [statsRes, alertasRes, leiturasRes] = await Promise.all([
-        getStats(),
-        getAlertas({ nivel: 'critical', resolvido: false }),
-        getLeituras({}),
-      ])
 
-      setStats(statsRes)
-      setAlertas(alertasRes.data.slice(0, 5))
+      const statsRes = await getStats().catch(() => null)
+      if (statsRes) setStats(statsRes)
 
-      const now = new Date()
-      const days: { date: string; paginas: number }[] = []
-      for (let i = 6; i >= 0; i--) {
-        const d = new Date(now)
-        d.setDate(d.getDate() - i)
-        const label = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
-        days.push({ date: label, paginas: 0 })
+      const alertasRes = await getAlertas({ nivel: 'critical', resolvido: false }).catch(() => null)
+      if (alertasRes) setAlertas(alertasRes.data.slice(0, 5))
+
+      const leiturasRes = await getLeituras({}).catch(() => null)
+      if (leiturasRes) {
+        const now = new Date()
+        const days: { date: string; paginas: number }[] = []
+        for (let i = 6; i >= 0; i--) {
+          const d = new Date(now)
+          d.setDate(d.getDate() - i)
+          const label = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
+          days.push({ date: label, paginas: 0 })
+        }
+
+        leiturasRes.data.forEach((leitura) => {
+          const leituraDate = new Date(leitura.data_leitura)
+          const diffDays = Math.floor(
+            (now.getTime() - leituraDate.getTime()) / (1000 * 60 * 60 * 24)
+          )
+          if (diffDays >= 0 && diffDays < 7) {
+            days[6 - diffDays].paginas += leitura.contador_total
+          }
+        })
+
+        setLineData(days)
       }
 
-      leiturasRes.data.forEach((leitura) => {
-        const leituraDate = new Date(leitura.data_leitura)
-        const diffDays = Math.floor(
-          (now.getTime() - leituraDate.getTime()) / (1000 * 60 * 60 * 24)
-        )
-        if (diffDays >= 0 && diffDays < 7) {
-          days[6 - diffDays].paginas += leitura.contador_total
-        }
-      })
-
-      setLineData(days)
+      if (!statsRes && !alertasRes && !leiturasRes) {
+        setError('Não foi possível carregar os dados do dashboard')
+      }
     } catch (err) {
       const message =
         err instanceof Error ? err.message : 'Erro ao carregar dados do dashboard'
@@ -77,42 +77,36 @@ export default function Dashboard() {
       value: stats?.total_equipamentos ?? 0,
       icon: '🖨️',
       color: 'blue' as const,
-      change: 5.2,
     },
     {
       title: 'Online',
       value: stats?.online ?? 0,
       icon: '✅',
       color: 'green' as const,
-      change: 2.1,
     },
     {
       title: 'Offline',
       value: stats?.offline ?? 0,
       icon: '❌',
       color: 'red' as const,
-      change: -1.3,
     },
     {
       title: 'Toners Baixos',
       value: stats?.toners_baixos ?? 0,
       icon: '⚠️',
       color: 'yellow' as const,
-      change: 8.7,
     },
     {
       title: 'Alertas Críticos',
       value: stats?.alertas_criticos ?? 0,
       icon: '🛑',
       color: 'red' as const,
-      change: -3.5,
     },
     {
       title: 'Total Páginas Mês',
       value: stats?.total_paginas_mes ?? 0,
       icon: '📄',
       color: 'purple' as const,
-      change: 12.4,
     },
   ]
 
@@ -184,7 +178,6 @@ export default function Dashboard() {
             value={card.value}
             icon={card.icon}
             color={card.color}
-            change={card.change}
             loading={loading}
           />
         ))}

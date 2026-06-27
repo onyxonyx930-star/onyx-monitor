@@ -43,13 +43,7 @@ router.get('/', (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      data: leituras,
-      pagination: {
-        page: Number(page),
-        limit: Number(limit),
-        total,
-        pages: Math.ceil(total / Number(limit)),
-      },
+      data: { data: leituras, total },
     });
   } catch (error) {
     res.status(500).json({
@@ -80,12 +74,6 @@ router.get('/equipamento/:id', (req: Request, res: Response) => {
     res.json({
       success: true,
       data: leituras,
-      pagination: {
-        page: Number(page),
-        limit: Number(limit),
-        total,
-        pages: Math.ceil(total / Number(limit)),
-      },
     });
   } catch (error) {
     res.status(500).json({
