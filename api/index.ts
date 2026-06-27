@@ -116,6 +116,11 @@ export default async function handler(nodeReq: any, nodeRes: any) {
     }
     const bodyStr = Buffer.concat(chunks).toString('utf-8');
 
+    if (nodeReq.url?.includes('/debug')) {
+      nodeRes.writeHead(200, { 'Content-Type': 'application/json' });
+      return nodeRes.end(JSON.stringify({ method: nodeReq.method, url: nodeReq.url, bodyLen: bodyStr.length, body: bodyStr.substring(0, 500), headers: nodeReq.headers }));
+    }
+
     const proto = nodeReq.headers['x-forwarded-proto'] || 'https';
     const host = nodeReq.headers.host || 'localhost';
     const url = `${proto}://${host}${nodeReq.url}`;
