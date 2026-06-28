@@ -1,4 +1,4 @@
-import { getAdminDb, Timestamp } from '../../server/firebase-admin.ts';
+import { getAdminDb, Timestamp } from '../../server/firebase-admin';
 
 let _adminDb: any;
 

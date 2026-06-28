@@ -1,4 +1,4 @@
-﻿import { getAdminDb, getAdminAuth, Timestamp, FieldValue } from '../server/firebase-admin.ts';
+﻿import { getAdminDb, getAdminAuth, Timestamp, FieldValue } from '../server/firebase-admin';
 
 let _adminDb: any, _adminAuth: any;
 

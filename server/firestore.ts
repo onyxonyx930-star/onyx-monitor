@@ -1,4 +1,4 @@
-import { getAdminDb, FieldValue, Timestamp } from './firebase-admin.ts';
+import { getAdminDb, FieldValue, Timestamp } from './firebase-admin';
 import { QueryDocumentSnapshot, DocumentData } from 'firebase-admin/firestore';
 
 const db = () => getAdminDb();
