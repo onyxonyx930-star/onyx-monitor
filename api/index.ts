@@ -4,40 +4,22 @@ import { getAuth } from 'firebase-admin/auth';
 
 let _adminDb: any, _adminAuth: any;
 
-function normalizePrivateKey(raw: string | undefined): string | undefined {
-  if (!raw) return undefined;
-  // Vercel stores newlines as literal \n — replace with real newlines
-  let key = raw.replace(/\\n/g, '\n').replace(/\\r/g, '\r');
-  // Strip wrapping quotes if present
-  if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
-    key = key.slice(1, -1);
-  }
-  return key;
-}
-
 async function loadDeps() {
   if (!_adminDb) {
     const projectId = process.env.FIREBASE_PROJECT_ID;
     const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-    const privateKey = normalizePrivateKey(process.env.FIREBASE_PRIVATE_KEY);
-
-    console.log(`[FIREBASE] Project: ${projectId || 'MISSING'}`);
-    console.log(`[FIREBASE] ClientEmail: ${clientEmail || 'MISSING'}`);
-    console.log(`[FIREBASE] PrivateKey present: ${!!privateKey} | Length: ${privateKey?.length || 0} | Has BEGIN: ${privateKey?.includes('BEGIN PRIVATE KEY') || privateKey?.includes('BEGIN RSA PRIVATE KEY')}`);
+    const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
 
     if (!projectId || !clientEmail || !privateKey) {
-      console.error('[FIREBASE] FAIL: Missing Firebase Admin credentials');
       throw new Error('Missing Firebase Admin credentials');
     }
 
     if (getApps().length === 0) {
       initializeApp({ credential: cert({ projectId, clientEmail, privateKey }) });
-      console.log('[FIREBASE] Admin SDK initialized');
     }
 
     _adminDb = getFirestore();
     _adminAuth = getAuth();
-    console.log('[FIREBASE] Firestore and Auth ready');
   }
 }
 
@@ -203,20 +185,6 @@ async function handleRequest(request: Request): Promise<Response> {
   const { path, params } = parseUrl(request.url);
 
   if (path === '/health') return _json({ status: 'ok', timestamp: new Date().toISOString() });
-  if (path === '/firebase-debug') {
-    const pid = process.env.FIREBASE_PROJECT_ID;
-    const ce = process.env.FIREBASE_CLIENT_EMAIL;
-    const pk = process.env.FIREBASE_PRIVATE_KEY;
-    return _json({
-      hasProjectId: !!pid,
-      hasClientEmail: !!ce,
-      hasPrivateKey: !!pk,
-      privateKeyLength: pk?.length || 0,
-      privateKeyHasNewlines: pk?.includes('\\n') || false,
-      privateKeyHasBegin: pk?.includes('BEGIN') || false,
-      loadedDeps: !!_adminDb,
-    });
-  }
   if (path.startsWith('/auth')) return handleAuth(request, path, params);
   if (path.startsWith('/equipamentos')) return handleEquipamentos(request, path, params);
   if (path.startsWith('/leituras')) return handleLeituras(request, path, params);

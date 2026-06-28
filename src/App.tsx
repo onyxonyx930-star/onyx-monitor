@@ -1,9 +1,9 @@
-import { lazy, Suspense, useEffect, useState, useCallback } from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { lazy, Suspense, useEffect, useState } from 'react'
+import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import Layout from './components/Layout'
 import Loading from './components/shared/Loading'
 import type { Equipamento } from './types'
-import { removeToken, onAuthStateChanged } from './services/api'
+import { logout, onAuthStateChanged } from './services/api'
 
 const Dashboard = lazy(() => import('./components/Dashboard/Dashboard'))
 const ListaEquipamentos = lazy(() => import('./components/Equipamentos/ListaEquipamentos'))
@@ -46,8 +46,11 @@ export default function App() {
   }
 
   const handleLogout = async () => {
-    await removeToken()
+    console.log('[APP] Logout initiated');
+    await logout()
     setIsAuthenticated(false)
+    // Force navigation to login
+    window.location.href = '/login'
   }
 
   if (isLoading) {

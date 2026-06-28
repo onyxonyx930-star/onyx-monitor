@@ -1,9 +1,5 @@
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged as fbOnAuthStateChanged, User } from 'firebase/auth';
 import { auth } from '../lib/firebase';
-
-function onAuthStateChanged(callback: (user: User | null) => void) {
-  return fbOnAuthStateChanged(auth, callback);
-}
 import type {
   Alerta,
   DashboardStats,
@@ -31,48 +27,24 @@ class ApiError extends Error {
   }
 }
 
+function onAuthStateChanged(callback: (user: User | null) => void) {
+  return fbOnAuthStateChanged(auth, callback);
+}
+
 async function getFirebaseToken(): Promise<string | null> {
   try {
     const user = auth.currentUser;
     if (!user) {
-      console.log('[TOKEN] auth.currentUser is null — waiting for onAuthStateChanged...');
-      return new Promise<string | null>((resolve) => {
-        const timeout = setTimeout(() => {
-          console.log('[TOKEN] FAIL: onAuthStateChanged timed out (5s)');
-          resolve(null);
-        }, 5000);
-        const unsubscribe = fbOnAuthStateChanged(auth, (u) => {
-          clearTimeout(timeout);
-          unsubscribe();
-          if (u) {
-            console.log(`[TOKEN] Got user from onAuthStateChanged: ${u.uid}`);
-            u.getIdToken(true).then((t) => {
-              console.log(`[TOKEN] Token obtained (length: ${t.length})`);
-              resolve(t);
-            }).catch((e) => {
-              console.error('[TOKEN] getIdToken failed:', e);
-              resolve(null);
-            });
-          } else {
-            console.log('[TOKEN] No user from onAuthStateChanged');
-            resolve(null);
-          }
-        });
-      });
+      console.log('[TOKEN] auth.currentUser is null');
+      return null;
     }
-    // Force refresh to ensure token is valid
     const token = await user.getIdToken(true);
-    console.log(`[TOKEN] Token obtained (length: ${token.length})`);
+    console.log(`[TOKEN] Token OK (length: ${token.length})`);
     return token;
   } catch (e) {
-    console.error('[TOKEN] Error getting Firebase token:', e);
+    console.error('[TOKEN] Error:', e);
     return null;
   }
-}
-
-function buildHeaders(): HeadersInit {
-  const headers: HeadersInit = { 'Content-Type': 'application/json' }
-  return headers
 }
 
 async function buildAuthHeaders(): Promise<HeadersInit> {
@@ -80,6 +52,8 @@ async function buildAuthHeaders(): Promise<HeadersInit> {
   const token = await getFirebaseToken()
   if (token) {
     headers['Authorization'] = `Bearer ${token}`
+  } else {
+    console.log('[AUTH] No token — request will be unauthenticated')
   }
   return headers
 }
@@ -100,7 +74,8 @@ interface ApiResponse<T> {
 
 async function request<T>(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  _retry = false
 ): Promise<T> {
   const url = `${BASE_URL}${endpoint}`
   const authHeaders = await buildAuthHeaders()
@@ -111,6 +86,18 @@ async function request<T>(
       ...(options.headers as Record<string, string>),
     },
   })
+
+  if (response.status === 401 && !_retry) {
+    console.log('[REQUEST] Got 401 — retrying with fresh token...')
+    // Force token refresh
+    const user = auth.currentUser;
+    if (user) {
+      try {
+        await user.getIdToken(true);
+      } catch {}
+    }
+    return request<T>(endpoint, options, true)
+  }
 
   if (!response.ok) {
     let data: any
@@ -136,9 +123,10 @@ export async function login(email: string, senha: string): Promise<{ token: stri
   try {
     const userCredential = await signInWithEmailAndPassword(auth, email, senha);
     const user = userCredential.user;
-    const token = await user.getIdToken();
+    const token = await user.getIdToken(true);
 
-    const userData: Usuario = {
+    // Fetch user profile from Firestore via API
+    let userData: Usuario = {
       id: user.uid,
       nome: user.displayName || email.split('@')[0],
       email: user.email || email,
@@ -146,17 +134,37 @@ export async function login(email: string, senha: string): Promise<{ token: stri
       ativo: true,
     };
 
+    try {
+      const profile = await request<Usuario>('/auth/me');
+      userData = profile;
+    } catch {
+      console.log('[LOGIN] Could not fetch profile from API, using local data');
+    }
+
     return { token, user: userData };
   } catch (e: any) {
-    console.error('Firebase login error:', e);
+    console.error('[LOGIN] Firebase error:', e?.code, e?.message);
     if (e.code === 'auth/user-not-found') throw new ApiError(404, 'Usuário não encontrado');
     if (e.code === 'auth/wrong-password' || e.code === 'auth/invalid-credential') throw new ApiError(401, 'Credenciais inválidas');
+    if (e.code === 'auth/too-many-requests') throw new ApiError(429, 'Muitas tentativas. Aguarde alguns minutos.');
     throw new ApiError(500, 'Erro ao fazer login');
   }
 }
 
 export async function logout(): Promise<void> {
-  await signOut(auth);
+  try {
+    await signOut(auth);
+  } catch (e) {
+    console.error('[LOGOUT] signOut error:', e);
+  }
+  // Clear all storage
+  try { localStorage.clear(); } catch {}
+  try { sessionStorage.clear(); } catch {}
+  // Clear cookies
+  document.cookie.split(';').forEach(c => {
+    document.cookie = c.trim().split('=')[0] + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+  });
+  console.log('[LOGOUT] All storage cleared');
 }
 
 export async function getMe(): Promise<Usuario> {
@@ -385,5 +393,5 @@ export async function deleteAuditoriaConfig(id: string): Promise<void> {
   await request(`/auditoria/config/${id}`, { method: 'DELETE' })
 }
 
-export { ApiError, getFirebaseToken as getToken, onAuthStateChanged, signOut as removeToken }
+export { ApiError, onAuthStateChanged, logout as removeToken }
 export type { User } from 'firebase/auth';
