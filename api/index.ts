@@ -248,49 +248,65 @@ async function handleEquipamentos(req: Request, path: string, params: Record<str
   if (auth.error) return auth.error;
 
   if (path === '/equipamentos/stats' && req.method === 'GET') {
-    const equipSnapshot = await _adminDb.collection('equipamentos').get();
-    const total = equipSnapshot.size;
+    let total = 0, online = 0, offline = 0, tonersBaixos = 0, alertasCriticos = 0, paginas = 0;
 
-    const leiturasSnapshot = await _adminDb.collection('leituras').get();
-    const leiturasMap = new Map<string, any>();
-    leiturasSnapshot.docs.forEach((doc: any) => {
-      const data = doc.data();
-      const existing = leiturasMap.get(data.equipamentoId);
-      if (!existing || data.dataLeitura > existing.dataLeitura) {
-        leiturasMap.set(data.equipamentoId, data);
-      }
-    });
+    try {
+      const equipSnapshot = await _adminDb.collection('equipamentos').get();
+      total = equipSnapshot.size;
+    } catch (_) { /* collection may not exist yet */ }
 
-    let online = 0, offline = 0;
-    leiturasMap.forEach((leitura: any) => {
-      if (leitura.statusOnline === 1) online++; else offline++;
-    });
+    try {
+      const leiturasSnapshot = await _adminDb.collection('leituras').get();
+      const leiturasMap = new Map<string, any>();
+      leiturasSnapshot.docs.forEach((doc: any) => {
+        const data = doc.data();
+        const existing = leiturasMap.get(data.equipamentoId);
+        if (!existing || data.dataLeitura > existing.dataLeitura) {
+          leiturasMap.set(data.equipamentoId, data);
+        }
+      });
+      leiturasMap.forEach((leitura: any) => {
+        if (leitura.statusOnline === 1) online++; else offline++;
+      });
+      const now = new Date();
+      const fd = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`;
+      leiturasSnapshot.docs.forEach((doc: any) => {
+        const data = doc.data();
+        if (data.dataLeitura >= fd) paginas += data.contadorTotal || 0;
+      });
+    } catch (_) { /* collection may not exist yet */ }
 
-    const suprimentosSnapshot = await _adminDb.collection('suprimentos').where('percentual', '<=', 20).get();
-    const tonersBaixos = suprimentosSnapshot.size;
+    try {
+      const suprimentosSnapshot = await _adminDb.collection('suprimentos').where('percentual', '<=', 20).get();
+      tonersBaixos = suprimentosSnapshot.size;
+    } catch (_) { /* index may not exist yet */ }
 
-    const alertasSnapshot = await _adminDb.collection('alertas').where('resolvido', '==', 0).where('nivel', '==', 'critical').get();
-    const alertasCriticos = alertasSnapshot.size;
-
-    const now = new Date();
-    const fd = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`;
-    let paginas = 0;
-    leiturasSnapshot.docs.forEach((doc: any) => {
-      const data = doc.data();
-      if (data.dataLeitura >= fd) paginas += data.contadorTotal || 0;
-    });
+    try {
+      const alertasSnapshot = await _adminDb.collection('alertas').where('resolvido', '==', 0).where('nivel', '==', 'critical').get();
+      alertasCriticos = alertasSnapshot.size;
+    } catch (_) { /* index may not exist yet */ }
 
     return _json({ success: true, data: { total_equipamentos: total, online, offline, toners_baixos: tonersBaixos, alertas_criticos: alertasCriticos, total_paginas_mes: paginas, clientes_maior_volume: [] } });
   }
 
   if (path === '/equipamentos' && req.method === 'GET') {
     const { cliente, status, search, page = '1', per_page = '10' } = params;
-    let query: FirebaseFirestore.Query = _adminDb.collection('equipamentos');
-    if (cliente) query = query.where('cliente', '==', cliente);
-    if (status) query = query.where('statusMonitoramento', '==', status);
-    query = query.orderBy('createdAt', 'desc');
 
-    const snapshot = await query.get();
+    let snapshot: FirebaseFirestore.QuerySnapshot;
+    try {
+      let query: FirebaseFirestore.Query = _adminDb.collection('equipamentos');
+      if (cliente) query = query.where('cliente', '==', cliente);
+      if (status) query = query.where('statusMonitoramento', '==', status);
+      query = query.orderBy('createdAt', 'desc');
+      snapshot = await query.get();
+    } catch (_) {
+      // Fallback: query without orderBy (no composite index needed)
+      let query2: FirebaseFirestore.Query = _adminDb.collection('equipamentos');
+      if (cliente) query2 = query2.where('cliente', '==', cliente);
+      if (status) query2 = query2.where('statusMonitoramento', '==', status);
+      snapshot = await query2.get();
+    }
+
     let equipamentos = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
 
     if (search) {
@@ -466,13 +482,24 @@ async function handleLeituras(req: Request, path: string, params: Record<string,
 
   if (path === '/leituras' && req.method === 'GET') {
     const { equipamento_id, data_inicio, data_fim, page = '1', limit = '50' } = params;
-    let query: FirebaseFirestore.Query = _adminDb.collection('leituras');
-    if (equipamento_id) query = query.where('equipamentoId', '==', equipamento_id);
-    if (data_inicio) query = query.where('dataLeitura', '>=', data_inicio);
-    if (data_fim) query = query.where('dataLeitura', '<=', data_fim);
-    query = query.orderBy('dataLeitura', 'desc');
 
-    const snapshot = await query.get();
+    let snapshot: FirebaseFirestore.QuerySnapshot;
+    try {
+      let query: FirebaseFirestore.Query = _adminDb.collection('leituras');
+      if (equipamento_id) query = query.where('equipamentoId', '==', equipamento_id);
+      if (data_inicio) query = query.where('dataLeitura', '>=', data_inicio);
+      if (data_fim) query = query.where('dataLeitura', '<=', data_fim);
+      query = query.orderBy('dataLeitura', 'desc');
+      snapshot = await query.get();
+    } catch (_) {
+      // Fallback: query without orderBy (no composite index needed)
+      let query2: FirebaseFirestore.Query = _adminDb.collection('leituras');
+      if (equipamento_id) query2 = query2.where('equipamentoId', '==', equipamento_id);
+      if (data_inicio) query2 = query2.where('dataLeitura', '>=', data_inicio);
+      if (data_fim) query2 = query2.where('dataLeitura', '<=', data_fim);
+      snapshot = await query2.get();
+    }
+
     const total = snapshot.size;
     const offset = (Number(page) - 1) * Number(limit);
     const data = snapshot.docs.slice(offset, offset + Number(limit)).map((doc: any) => ({ id: doc.id, ...doc.data() }));
@@ -483,7 +510,14 @@ async function handleLeituras(req: Request, path: string, params: Record<string,
   if (path.match(/^\/leituras\/equipamento\/[^\/]+$/) && req.method === 'GET') {
     const id = getSegment(path, 2)!;
     const { page = '1', limit = '100' } = params;
-    const snapshot = await _adminDb.collection('leituras').where('equipamentoId', '==', id).orderBy('dataLeitura', 'desc').get();
+
+    let snapshot: FirebaseFirestore.QuerySnapshot;
+    try {
+      snapshot = await _adminDb.collection('leituras').where('equipamentoId', '==', id).orderBy('dataLeitura', 'desc').get();
+    } catch (_) {
+      snapshot = await _adminDb.collection('leituras').where('equipamentoId', '==', id).get();
+    }
+
     const total = snapshot.size;
     const offset = (Number(page) - 1) * Number(limit);
     const data = snapshot.docs.slice(offset, offset + Number(limit)).map((doc: any) => ({ id: doc.id, ...doc.data() }));
@@ -557,14 +591,26 @@ async function handleAlertas(req: Request, path: string, params: Record<string, 
 
   if (path === '/alertas' && req.method === 'GET') {
     const { tipo, nivel, resolvido, equipamento_id, page = '1', limit = '50' } = params;
-    let query: FirebaseFirestore.Query = _adminDb.collection('alertas');
-    if (tipo) query = query.where('tipo', '==', tipo);
-    if (nivel) query = query.where('nivel', '==', nivel);
-    if (resolvido !== undefined) query = query.where('resolvido', '==', resolvido === 'true' ? 1 : 0);
-    if (equipamento_id) query = query.where('equipamentoId', '==', equipamento_id);
-    query = query.orderBy('createdAt', 'desc');
 
-    const snapshot = await query.get();
+    let snapshot: FirebaseFirestore.QuerySnapshot;
+    try {
+      let query: FirebaseFirestore.Query = _adminDb.collection('alertas');
+      if (tipo) query = query.where('tipo', '==', tipo);
+      if (nivel) query = query.where('nivel', '==', nivel);
+      if (resolvido !== undefined) query = query.where('resolvido', '==', resolvido === 'true' ? 1 : 0);
+      if (equipamento_id) query = query.where('equipamentoId', '==', equipamento_id);
+      query = query.orderBy('createdAt', 'desc');
+      snapshot = await query.get();
+    } catch (_) {
+      // Fallback: query without orderBy (no composite index needed)
+      let query2: FirebaseFirestore.Query = _adminDb.collection('alertas');
+      if (tipo) query2 = query2.where('tipo', '==', tipo);
+      if (nivel) query2 = query2.where('nivel', '==', nivel);
+      if (resolvido !== undefined) query2 = query2.where('resolvido', '==', resolvido === 'true' ? 1 : 0);
+      if (equipamento_id) query2 = query2.where('equipamentoId', '==', equipamento_id);
+      snapshot = await query2.get();
+    }
+
     const total = snapshot.size;
     const offset = (Number(page) - 1) * Number(limit);
     const data = snapshot.docs.slice(offset, offset + Number(limit)).map((doc: any) => ({ id: doc.id, ...doc.data() }));

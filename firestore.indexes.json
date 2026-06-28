@@ -9,18 +9,12 @@
       ]
     },
     {
-      "collectionGroup": "leituras",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "dataLeitura", "order": "ASCENDING" }
-      ]
-    },
-    {
       "collectionGroup": "alertas",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "nivel", "order": "ASCENDING" },
         { "fieldPath": "resolvido", "order": "ASCENDING" },
-        { "fieldPath": "nivel", "order": "ASCENDING" }
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
     },
     {
@@ -41,20 +35,6 @@
       ]
     },
     {
-      "collectionGroup": "suprimentos",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "percentual", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "agents",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "apiKey", "order": "ASCENDING" }
-      ]
-    },
-    {
       "collectionGroup": "agentLogs",
       "queryScope": "COLLECTION",
       "fields": [
@@ -67,29 +47,8 @@
       "collectionGroup": "auditoriaImpressoes",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "dataImpressao", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "auditoriaImpressoes",
-      "queryScope": "COLLECTION",
-      "fields": [
         { "fieldPath": "cliente", "order": "ASCENDING" },
         { "fieldPath": "dataImpressao", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "configColeta",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "ativo", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "equipamentos",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "statusMonitoramento", "order": "ASCENDING" }
       ]
     }
   ],
