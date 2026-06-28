@@ -1,5 +1,9 @@
-import { signInWithEmailAndPassword, signOut, onAuthStateChanged, User } from 'firebase/auth';
+import { signInWithEmailAndPassword, signOut, onAuthStateChanged as fbOnAuthStateChanged, User } from 'firebase/auth';
 import { auth } from '../lib/firebase';
+
+function onAuthStateChanged(callback: (user: User | null) => void) {
+  return fbOnAuthStateChanged(auth, callback);
+}
 import type {
   Alerta,
   DashboardStats,
