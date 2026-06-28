@@ -25,8 +25,8 @@ export default function FormAgent() {
       setError('')
       await createAgent(form)
       navigate('/agents')
-    } catch (err) {
-      setError('Erro ao criar agent')
+    } catch (err: any) {
+      setError(err?.data?.message || err?.message || 'Erro ao criar agent')
     } finally {
       setLoading(false)
     }

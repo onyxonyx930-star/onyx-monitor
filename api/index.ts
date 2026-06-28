@@ -82,14 +82,20 @@ async function requireAuth(req: Request): Promise<{ user: any; error?: Response 
     let userDoc = await _adminDb.collection('usuarios').doc(decoded.uid).get();
     if (!userDoc.exists) {
       const userRecord = await _adminAuth.getUser(decoded.uid);
+      const isAdminEmail = userRecord.email === 'admin@onyx.com';
       await _adminDb.collection('usuarios').doc(decoded.uid).set({
         nome: userRecord.displayName || userRecord.email?.split('@')[0] || 'User',
         email: userRecord.email,
-        role: 'operador',
+        role: isAdminEmail ? 'admin' : 'operador',
         ativo: true,
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now()
       });
+      userDoc = await _adminDb.collection('usuarios').doc(decoded.uid).get();
+    }
+    const userData = userDoc.data();
+    if (userData?.email === 'admin@onyx.com' && userData?.role !== 'admin') {
+      await _adminDb.collection('usuarios').doc(decoded.uid).update({ role: 'admin', updatedAt: Timestamp.now() });
       userDoc = await _adminDb.collection('usuarios').doc(decoded.uid).get();
     }
     if (!userDoc.data()?.ativo) return { user: null, error: _json({ success: false, message: 'Usuário não encontrado' }, 401) };
@@ -177,10 +183,11 @@ async function handleAuth(req: Request, path: string, params: Record<string, str
       const userRecord = await _adminAuth.getUserByEmail(email);
       let userDoc = await _adminDb.collection('usuarios').doc(userRecord.uid).get();
       if (!userDoc.exists) {
+        const isAdminEmail = email === 'admin@onyx.com';
         await _adminDb.collection('usuarios').doc(userRecord.uid).set({
           nome: userRecord.displayName || email.split('@')[0],
           email: userRecord.email,
-          role: 'operador',
+          role: isAdminEmail ? 'admin' : 'operador',
           ativo: true,
           createdAt: Timestamp.now(),
           updatedAt: Timestamp.now()
@@ -657,8 +664,9 @@ async function handleRelatorios(req: Request, path: string, params: Record<strin
 // ======================== AGENTS ========================
 async function handleAgents(req: Request, path: string, params: Record<string, string>) {
   if (path === '/agents/register' && req.method === 'POST') {
-    const admin = await requireAdmin(req);
-    if (admin.error) return admin.error;
+    const auth = await requireAuth(req);
+    if (auth.error) return auth.error;
+    if (auth.user.role !== 'admin' && auth.user.role !== 'operador') return _error('Acesso negado', 403);
     const body = await readBody(req);
     const { name, company_id, location, ip_address, version } = body;
     if (!name || !company_id) return _error('Nome e company_id são obrigatórios', 400);
