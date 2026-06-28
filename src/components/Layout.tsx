@@ -1,6 +1,6 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
-import type { Usuario } from '../types'
+import { auth } from '../lib/firebase'
 import { getAlertasStats } from '../services/api'
 
 interface LayoutProps {
@@ -36,16 +36,8 @@ export default function Layout({ children, onLogout }: LayoutProps) {
   const location = useLocation()
   const navigate = useNavigate()
 
-  const user = useMemo(() => {
-    try {
-      const raw = localStorage.getItem('onyx_user')
-      return raw ? JSON.parse(raw) as Usuario : null
-    } catch {
-      return null
-    }
-  }, [])
-
-  const userName = user?.nome || 'Admin'
+  const user = auth.currentUser
+  const userName = user?.displayName || user?.email?.split('@')[0] || 'Admin'
   const userEmail = user?.email || 'admin@onyx.com'
   const initials = userName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()
 

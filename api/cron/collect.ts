@@ -25,6 +25,13 @@ export default async function handler(nodeReq: any, nodeRes: any) {
   try {
     await loadDeps();
 
+    const cronSecret = process.env.CRON_SECRET;
+    const authHeader = nodeReq.headers['authorization'] || nodeReq.headers['x-vercel-cron-secret'];
+    if (cronSecret && authHeader !== `Bearer ${cronSecret}` && authHeader !== cronSecret) {
+      nodeRes.writeHead(401, { 'Content-Type': 'application/json' });
+      return nodeRes.end(JSON.stringify({ success: false, message: 'Unauthorized' }));
+    }
+
     const configsSnapshot = await _adminDb.collection('configColeta').where('ativo', '==', 1).get();
     let collected = 0, errors = 0;
 

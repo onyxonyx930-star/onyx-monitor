@@ -32,9 +32,22 @@ class ApiError extends Error {
 }
 
 async function getFirebaseToken(): Promise<string | null> {
-  const user = auth.currentUser;
-  if (!user) return null;
   try {
+    const user = auth.currentUser;
+    if (!user) {
+      return new Promise<string | null>((resolve) => {
+        const timeout = setTimeout(() => resolve(null), 5000);
+        const unsubscribe = fbOnAuthStateChanged(auth, (u) => {
+          clearTimeout(timeout);
+          unsubscribe();
+          if (u) {
+            u.getIdToken().then(resolve).catch(() => resolve(null));
+          } else {
+            resolve(null);
+          }
+        });
+      });
+    }
     return await user.getIdToken();
   } catch (e) {
     console.error('Error getting Firebase token:', e);
@@ -113,7 +126,7 @@ export async function login(email: string, senha: string): Promise<{ token: stri
       id: user.uid,
       nome: user.displayName || email.split('@')[0],
       email: user.email || email,
-      role: 'admin',
+      role: 'operador',
       ativo: true,
     };
 
@@ -146,7 +159,7 @@ export async function listUsuarios(): Promise<Usuario[]> {
 }
 
 // Equipamentos
-export async function getEquipamentos(filtros?: FiltrosEquipamento): Promise<{ data: Equipamento[]; total: number }> {
+export async function getEquipamentos(filtros?: FiltrosEquipamento & { page?: number; per_page?: number }): Promise<{ data: Equipamento[]; total: number }> {
   const params = buildQueryParams(filtros as Record<string, string | number | boolean | undefined>)
   return request<{ data: Equipamento[]; total: number }>(`/equipamentos${params}`)
 }

@@ -24,9 +24,10 @@ async function loadDeps() {
 }
 
 function _json(data: any, status = 200) {
+  const origin = process.env.CORS_ORIGIN || 'https://onyx-monitor.vercel.app';
   return Response.json(data, {
     status,
-    headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Authorization, Content-Type' }
+    headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Headers': 'Authorization, Content-Type' }
   });
 }
 
@@ -61,9 +62,8 @@ async function readBody(req: Request): Promise<any> {
     const text = await req.text();
     if (!text || !text.trim()) return {};
     return JSON.parse(text);
-  } catch (e: any) {
-    console.error('readBody error:', e?.message);
-    return {};
+  } catch {
+    throw new Error('JSON inválido');
   }
 }
 
@@ -85,7 +85,7 @@ async function requireAuth(req: Request): Promise<{ user: any; error?: Response 
       await _adminDb.collection('usuarios').doc(decoded.uid).set({
         nome: userRecord.displayName || userRecord.email?.split('@')[0] || 'User',
         email: userRecord.email,
-        role: 'admin',
+        role: 'operador',
         ativo: true,
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now()
@@ -112,7 +112,8 @@ export default async function handler(nodeReq: any, nodeRes: any) {
     await loadDeps();
 
     if (nodeReq.method === 'OPTIONS') {
-      nodeRes.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type' });
+      const origin = process.env.CORS_ORIGIN || 'https://onyx-monitor.vercel.app';
+      nodeRes.writeHead(204, { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Max-Age': '86400' });
       return nodeRes.end();
     }
 
@@ -179,7 +180,7 @@ async function handleAuth(req: Request, path: string, params: Record<string, str
         await _adminDb.collection('usuarios').doc(userRecord.uid).set({
           nome: userRecord.displayName || email.split('@')[0],
           email: userRecord.email,
-          role: 'admin',
+          role: 'operador',
           ativo: true,
           createdAt: Timestamp.now(),
           updatedAt: Timestamp.now()
@@ -656,6 +657,8 @@ async function handleRelatorios(req: Request, path: string, params: Record<strin
 // ======================== AGENTS ========================
 async function handleAgents(req: Request, path: string, params: Record<string, string>) {
   if (path === '/agents/register' && req.method === 'POST') {
+    const admin = await requireAdmin(req);
+    if (admin.error) return admin.error;
     const body = await readBody(req);
     const { name, company_id, location, ip_address, version } = body;
     if (!name || !company_id) return _error('Nome e company_id são obrigatórios', 400);

@@ -5,7 +5,6 @@ import { formatNumber, downloadFile } from '../../utils/helpers'
 import Loading from '../shared/Loading'
 import Badge from '../shared/Badge'
 import EmptyState from '../shared/EmptyState'
-import ExportButtons from './ExportButtons'
 
 type Tab = 'mensal' | 'equipamento' | 'consumo' | 'exportar'
 

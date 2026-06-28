@@ -87,12 +87,6 @@ export default function Login({ onLogin }: LoginProps) {
               )}
             </button>
           </form>
-
-          <div className="mt-6 pt-4 border-t border-onyx-700/50">
-            <p className="text-xs text-gray-500 text-center">
-              Credenciais padrão: admin@onyx.com / admin123
-            </p>
-          </div>
         </div>
       </div>
     </div>

@@ -60,13 +60,14 @@ export interface Alerta {
 }
 
 export interface Usuario {
-  id: number
+  id: string
   nome: string
   email: string
   role: 'admin' | 'operador' | 'cliente'
-  cliente_id: number
+  cliente_id?: string
   ativo: boolean
-  created_at: string
+  created_at?: string
+  createdAt?: any
 }
 
 export interface DashboardStats {
@@ -89,27 +90,6 @@ export interface RelatorioMensal {
   toner_magenta_consumido: number
   toner_amarelo_consumido: number
   dias_monitorados: number
-}
-
-export interface ConfigColeta {
-  id: number
-  equipamento_id: number
-  intervalo: '1h' | '6h' | 'diario'
-  ativo: boolean
-  ultima_coleta: string
-  proxima_coleta: string
-}
-
-export interface AuthResponse {
-  token: string
-  user: Usuario
-}
-
-export interface PaginatedResponse<T> {
-  data: T[]
-  total: number
-  page: number
-  per_page: number
 }
 
 export type FiltrosEquipamento = {
@@ -159,26 +139,4 @@ export interface AgentLog {
   message: string
   details: Record<string, unknown>
   created_at: string
-}
-
-export interface AgentCollectData {
-  ip: string
-  nome: string
-  numero_serie: string
-  modelo: string
-  fabricante?: string
-  cliente?: string
-  status_online: boolean
-  contadores: {
-    total: number
-    pb: number
-    cor: number
-  }
-  toner: {
-    preto: number
-    ciano: number
-    magenta: number
-    amarelo: number
-  }
-  mensagens_erro: string
 }

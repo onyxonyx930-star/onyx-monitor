@@ -49,6 +49,8 @@ export default function ListaEquipamentos({ onNovo, onEditar }: ListaEquipamento
       setError(null)
       const res = await getEquipamentos({
         ...filtros,
+        page,
+        per_page: perPage,
       })
       setEquipamentos(res.data)
       setTotal(res.total)
@@ -59,7 +61,7 @@ export default function ListaEquipamentos({ onNovo, onEditar }: ListaEquipamento
     } finally {
       setLoading(false)
     }
-  }, [filtros])
+  }, [filtros, page, perPage])
 
   useEffect(() => {
     fetchEquipamentos()
