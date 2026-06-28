@@ -1,3 +1,5 @@
+import { signInWithEmailAndPassword, signOut, onAuthStateChanged, User } from 'firebase/auth';
+import { auth } from '../lib/firebase';
 import type {
   Alerta,
   DashboardStats,
@@ -25,21 +27,25 @@ class ApiError extends Error {
   }
 }
 
-function getToken(): string | null {
-  return localStorage.getItem('onyx_token')
-}
-
-function setToken(token: string): void {
-  localStorage.setItem('onyx_token', token)
-}
-
-function removeToken(): void {
-  localStorage.removeItem('onyx_token')
+async function getFirebaseToken(): Promise<string | null> {
+  const user = auth.currentUser;
+  if (!user) return null;
+  try {
+    return await user.getIdToken();
+  } catch (e) {
+    console.error('Error getting Firebase token:', e);
+    return null;
+  }
 }
 
 function buildHeaders(): HeadersInit {
   const headers: HeadersInit = { 'Content-Type': 'application/json' }
-  const token = getToken()
+  return headers
+}
+
+async function buildAuthHeaders(): Promise<HeadersInit> {
+  const headers: HeadersInit = { 'Content-Type': 'application/json' }
+  const token = await getFirebaseToken()
   if (token) {
     headers['Authorization'] = `Bearer ${token}`
   }
@@ -65,10 +71,11 @@ async function request<T>(
   options: RequestInit = {}
 ): Promise<T> {
   const url = `${BASE_URL}${endpoint}`
+  const authHeaders = await buildAuthHeaders()
   const response = await fetch(url, {
     ...options,
     headers: {
-      ...buildHeaders(),
+      ...authHeaders,
       ...(options.headers as Record<string, string>),
     },
   })
@@ -93,20 +100,30 @@ async function request<T>(
 
 // Auth
 export async function login(email: string, senha: string): Promise<{ token: string; user: Usuario }> {
-  const response = await fetch(`${BASE_URL}/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, senha }),
-  })
+  try {
+    const userCredential = await signInWithEmailAndPassword(auth, email, senha);
+    const user = userCredential.user;
+    const token = await user.getIdToken();
 
-  const json: ApiResponse<{ token: string; user: Usuario }> = await response.json()
+    const userData: Usuario = {
+      id: user.uid,
+      nome: user.displayName || email.split('@')[0],
+      email: user.email || email,
+      role: 'admin',
+      ativo: true,
+    };
 
-  if (!response.ok) {
-    throw new ApiError(response.status, json.message || 'Erro ao fazer login', json)
+    return { token, user: userData };
+  } catch (e: any) {
+    console.error('Firebase login error:', e);
+    if (e.code === 'auth/user-not-found') throw new ApiError(404, 'Usuário não encontrado');
+    if (e.code === 'auth/wrong-password' || e.code === 'auth/invalid-credential') throw new ApiError(401, 'Credenciais inválidas');
+    throw new ApiError(500, 'Erro ao fazer login');
   }
+}
 
-  setToken(json.data.token)
-  return json.data
+export async function logout(): Promise<void> {
+  await signOut(auth);
 }
 
 export async function getMe(): Promise<Usuario> {
@@ -130,7 +147,7 @@ export async function getEquipamentos(filtros?: FiltrosEquipamento): Promise<{ d
   return request<{ data: Equipamento[]; total: number }>(`/equipamentos${params}`)
 }
 
-export async function getEquipamento(id: number): Promise<Equipamento> {
+export async function getEquipamento(id: string): Promise<Equipamento> {
   return request<Equipamento>(`/equipamentos/${id}`)
 }
 
@@ -141,18 +158,18 @@ export async function createEquipamento(equipamento: Partial<Equipamento>): Prom
   })
 }
 
-export async function updateEquipamento(id: number, equipamento: Partial<Equipamento>): Promise<Equipamento> {
+export async function updateEquipamento(id: string, equipamento: Partial<Equipamento>): Promise<Equipamento> {
   return request<Equipamento>(`/equipamentos/${id}`, {
     method: 'PUT',
     body: JSON.stringify(equipamento),
   })
 }
 
-export async function deleteEquipamento(id: number): Promise<void> {
+export async function deleteEquipamento(id: string): Promise<void> {
   await request(`/equipamentos/${id}`, { method: 'DELETE' })
 }
 
-export async function collectEquipamento(id: number): Promise<Leitura> {
+export async function collectEquipamento(id: string): Promise<Leitura> {
   return request<Leitura>(`/equipamentos/${id}/collect`, { method: 'POST' })
 }
 
@@ -166,12 +183,12 @@ export async function getLeituras(filtros?: FiltrosLeitura): Promise<{ data: Lei
   return request<{ data: Leitura[]; total: number }>(`/leituras${params}`)
 }
 
-export async function getLeitura(id: number): Promise<Leitura> {
+export async function getLeitura(id: string): Promise<Leitura> {
   return request<Leitura>(`/leituras/${id}`)
 }
 
 export async function getLeiturasEquipamento(
-  equipamentoId: number,
+  equipamentoId: string,
   limit = 30
 ): Promise<Leitura[]> {
   return request<Leitura[]>(`/leituras/equipamento/${equipamentoId}?limit=${limit}`)
@@ -182,11 +199,11 @@ export async function getSuprimentos(): Promise<Suprimento[]> {
   return request<Suprimento[]>('/suprimentos')
 }
 
-export async function getSuprimentosEquipamento(equipamentoId: number): Promise<Suprimento[]> {
+export async function getSuprimentosEquipamento(equipamentoId: string): Promise<Suprimento[]> {
   return request<Suprimento[]>(`/suprimentos/equipamento/${equipamentoId}`)
 }
 
-export async function updateSuprimento(id: number, dados: Partial<Suprimento>): Promise<Suprimento> {
+export async function updateSuprimento(id: string, dados: Partial<Suprimento>): Promise<Suprimento> {
   return request<Suprimento>(`/suprimentos/${id}`, {
     method: 'PUT',
     body: JSON.stringify(dados),
@@ -199,8 +216,8 @@ export async function getAlertas(filtros?: FiltrosAlerta): Promise<{ data: Alert
   return request<{ data: Alerta[]; total: number }>(`/alertas${params}`)
 }
 
-export async function resolverAlerta(id: number): Promise<Alerta> {
-  return request<Alerta>(`/alertas/${id}/resolve`, { method: 'PUT' })
+export async function resolverAlerta(id: string): Promise<Alerta> {
+  return request<Alerta>(`/alertas/${id}/resolver`, { method: 'PUT' })
 }
 
 export async function getAlertasStats(): Promise<{ total: number; ativos: number; criticos: number; warnings: number; infos: number }> {
@@ -212,7 +229,7 @@ export async function getRelatorioMensal(mes: string): Promise<RelatorioMensal[]
   return request<RelatorioMensal[]>(`/relatorios/mensal?mes=${mes}`)
 }
 
-export async function getRelatorioEquipamento(equipamentoId: number): Promise<Leitura[]> {
+export async function getRelatorioEquipamento(equipamentoId: string): Promise<Leitura[]> {
   return request<Leitura[]>(`/relatorios/equipamento/${equipamentoId}`)
 }
 
@@ -229,9 +246,8 @@ export async function getRelatorioConsumo(
 
 export async function exportExcel(params: Record<string, string>): Promise<Blob> {
   const query = buildQueryParams(params)
-  const token = getToken()
   const response = await fetch(`${BASE_URL}/relatorios/export/excel${query}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: await buildAuthHeaders(),
   })
   if (!response.ok) throw new ApiError(response.status, 'Erro ao exportar Excel')
   return response.blob()
@@ -239,9 +255,8 @@ export async function exportExcel(params: Record<string, string>): Promise<Blob>
 
 export async function exportPdf(params: Record<string, string>): Promise<Blob> {
   const query = buildQueryParams(params)
-  const token = getToken()
   const response = await fetch(`${BASE_URL}/relatorios/export/pdf${query}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: await buildAuthHeaders(),
   })
   if (!response.ok) throw new ApiError(response.status, 'Erro ao exportar PDF')
   return response.blob()
@@ -252,43 +267,43 @@ export async function getAgents(): Promise<import('../types').Agent[]> {
   return request<import('../types').Agent[]>('/agents')
 }
 
-export async function getAgent(id: number): Promise<import('../types').Agent> {
+export async function getAgent(id: string): Promise<import('../types').Agent> {
   return request<import('../types').Agent>(`/agents/${id}`)
 }
 
 export async function createAgent(agent: Partial<import('../types').Agent>): Promise<import('../types').Agent> {
-  return request<import('../types').Agent>('/agents', {
+  return request<import('../types').Agent>('/agents/register', {
     method: 'POST',
     body: JSON.stringify(agent),
   })
 }
 
-export async function updateAgent(id: number, agent: Partial<import('../types').Agent>): Promise<import('../types').Agent> {
+export async function updateAgent(id: string, agent: Partial<import('../types').Agent>): Promise<import('../types').Agent> {
   return request<import('../types').Agent>(`/agents/${id}`, {
     method: 'PUT',
     body: JSON.stringify(agent),
   })
 }
 
-export async function deleteAgent(id: number): Promise<void> {
+export async function deleteAgent(id: string): Promise<void> {
   await request(`/agents/${id}`, { method: 'DELETE' })
 }
 
-export async function assignEquipmentToAgent(agentId: number, equipamentoId: number): Promise<void> {
+export async function assignEquipmentToAgent(agentId: string, equipamentoId: string): Promise<void> {
   await request(`/agents/${agentId}/assign`, {
     method: 'POST',
     body: JSON.stringify({ equipamento_id: equipamentoId }),
   })
 }
 
-export async function unassignEquipmentFromAgent(agentId: number, equipamentoId: number): Promise<void> {
+export async function unassignEquipmentFromAgent(agentId: string, equipamentoId: string): Promise<void> {
   await request(`/agents/${agentId}/unassign`, {
     method: 'POST',
     body: JSON.stringify({ equipamento_id: equipamentoId }),
   })
 }
 
-export async function getAgentLogs(agentId: number, level?: string): Promise<import('../types').AgentLog[]> {
+export async function getAgentLogs(agentId: string, level?: string): Promise<import('../types').AgentLog[]> {
   const params = level ? `?level=${level}` : ''
   return request<import('../types').AgentLog[]>(`/agents/${agentId}/logs${params}`)
 }
@@ -312,15 +327,14 @@ export async function createAuditoriaBatch(records: Partial<import('../types/aud
   return request('/auditoria/batch', { method: 'POST', body: JSON.stringify({ records }) })
 }
 
-export async function deleteAuditoria(id: number): Promise<void> {
+export async function deleteAuditoria(id: string): Promise<void> {
   await request(`/auditoria/${id}`, { method: 'DELETE' })
 }
 
 export async function exportAuditoriaCsv(filtros?: Record<string, string>): Promise<Blob> {
   const query = buildQueryParams(filtros as Record<string, string | number | boolean | undefined>)
-  const token = getToken()
   const response = await fetch(`${BASE_URL}/auditoria/export/csv${query}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: await buildAuthHeaders(),
   })
   if (!response.ok) throw new ApiError(response.status, 'Erro ao exportar CSV')
   return response.blob()
@@ -334,8 +348,9 @@ export async function createAuditoriaConfig(config: Partial<import('../types/aud
   return request('/auditoria/config', { method: 'POST', body: JSON.stringify(config) })
 }
 
-export async function deleteAuditoriaConfig(id: number): Promise<void> {
+export async function deleteAuditoriaConfig(id: string): Promise<void> {
   await request(`/auditoria/config/${id}`, { method: 'DELETE' })
 }
 
-export { ApiError, getToken, removeToken }
+export { ApiError, getFirebaseToken, onAuthStateChanged, signOut }
+export type { User } from 'firebase/auth';

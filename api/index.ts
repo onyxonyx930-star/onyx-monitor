@@ -1,50 +1,11 @@
-﻿let _pg: any, _jwt: any, _crypto: any;
-let _getDb: any, _query: any;
-let _hashPassword: any, _signToken: any, _requireAuth: any, _requireAdmin: any;
+﻿import { getAdminDb, getAdminAuth, Timestamp, FieldValue } from '../server/firebase-admin.ts';
+
+let _adminDb: any, _adminAuth: any;
 
 async function loadDeps() {
-  if (!_pg) {
-    _pg = await import('pg');
-    const Pool = _pg.default?.Pool || _pg.Pool;
-    let pool: any = null;
-    _getDb = () => {
-      if (!pool) {
-        const connStr = process.env.SUPABASE_URL || process.env.DATABASE_URL;
-        if (!connStr) throw new Error('DATABASE_URL required');
-        pool = new Pool({ connectionString: connStr, ssl: { rejectUnauthorized: false }, max: 5, idleTimeoutMillis: 10000, connectionTimeoutMillis: 10000, options: '-c statement_timeout=30000', prepareThreshold: 0 });
-      }
-      return pool;
-    };
-    _query = async (text: string, params?: any[]) => {
-      const db = _getDb();
-      const client = await db.connect();
-      try { return await client.query(text, params); } finally { client.release(); }
-    };
-  }
-  if (!_jwt) {
-    _jwt = await import('jsonwebtoken');
-    _crypto = await import('crypto');
-    const jwt = _jwt.default || _jwt;
-    const JWT_SECRET = process.env.JWT_SECRET || 'onyx-monitor-secret-key-change-in-production';
-    const JWT_EXPIRES_IN = '24h';
-    _hashPassword = (p: string) => _crypto.createHash('sha256').update(p).digest('hex');
-    _signToken = (u: any) => jwt.sign(u, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
-    _requireAuth = async (req: Request) => {
-      const h = req.headers.get('authorization');
-      if (!h || !h.startsWith('Bearer ')) return { user: null, error: _json({ success: false, message: 'Token não fornecido' }, 401) };
-      try {
-        const d = jwt.verify(h.split(' ')[1], JWT_SECRET) as any;
-        const r = await _query('SELECT id, nome, email, role, cliente_id, ativo FROM usuarios WHERE id=$1 AND ativo=1', [d.userId]);
-        if (!r.rows[0]) return { user: null, error: _json({ success: false, message: 'Usuário não encontrado' }, 401) };
-        return { user: r.rows[0] };
-      } catch { return { user: null, error: _json({ success: false, message: 'Token inválido' }, 401) }; }
-    };
-    _requireAdmin = async (req: Request) => {
-      const { user, error } = await _requireAuth(req);
-      if (error) return { user: null, error };
-      if (user.role !== 'admin') return { user: null, error: _json({ success: false, message: 'Acesso negado' }, 403) };
-      return { user };
-    };
+  if (!_adminDb) {
+    _adminDb = getAdminDb();
+    _adminAuth = getAdminAuth();
   }
 }
 
@@ -92,13 +53,32 @@ async function readBody(req: Request): Promise<any> {
   }
 }
 
-const json_ = _json;
-const error_ = _error;
-
 function isPrivateIP(ip: string): boolean {
   const parts = ip.split('.').map(Number);
   if (parts.length !== 4) return false;
   return parts[0] === 10 || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) || (parts[0] === 192 && parts[1] === 168) || parts[0] === 127 || parts[0] === 0;
+}
+
+async function requireAuth(req: Request): Promise<{ user: any; error?: Response }> {
+  const h = req.headers.get('authorization');
+  if (!h || !h.startsWith('Bearer ')) return { user: null, error: _json({ success: false, message: 'Token não fornecido' }, 401) };
+  try {
+    const token = h.split(' ')[1];
+    const decoded = await _adminAuth.verifyIdToken(token);
+    const userDoc = await _adminDb.collection('usuarios').doc(decoded.uid).get();
+    if (!userDoc.exists || !userDoc.data()?.ativo) return { user: null, error: _json({ success: false, message: 'Usuário não encontrado' }, 401) };
+    return { user: { id: userDoc.id, ...userDoc.data() } };
+  } catch (e: any) {
+    console.error('Auth error:', e?.message);
+    return { user: null, error: _json({ success: false, message: 'Token inválido' }, 401) };
+  }
+}
+
+async function requireAdmin(req: Request): Promise<{ user: any; error?: Response }> {
+  const { user, error } = await requireAuth(req);
+  if (error) return { user: null, error };
+  if (user.role !== 'admin') return { user: null, error: _json({ success: false, message: 'Acesso negado' }, 403) };
+  return { user };
 }
 
 export default async function handler(nodeReq: any, nodeRes: any) {
@@ -166,142 +146,218 @@ async function handleAuth(req: Request, path: string, params: Record<string, str
     const body = await readBody(req);
     const { email, senha } = body;
     if (!email || !senha) return _error('Email e senha são obrigatórios', 400);
-    const result = await _query('SELECT * FROM usuarios WHERE email = $1 AND ativo = 1', [email]);
-    const user = result.rows[0];
-    if (!user || _hashPassword(senha) !== user.senha_hash) return _error('Credenciais inválidas', 401);
-    const token = _signToken({ userId: user.id, email: user.email, role: user.role });
-    return _json({ success: true, data: { token, user: { id: user.id, nome: user.nome, email: user.email, role: user.role } } });
+    try {
+      const userRecord = await _adminAuth.getUserByEmail(email);
+      const userDoc = await _adminDb.collection('usuarios').doc(userRecord.uid).get();
+      if (!userDoc.exists) return _error('Usuário não encontrado', 404);
+      const userData = userDoc.data();
+      if (!userData?.ativo) return _error('Usuário inativo', 403);
+      const customToken = await _adminAuth.createCustomToken(userRecord.uid);
+      return _json({ success: true, data: { token: customToken, user: { id: userRecord.uid, nome: userData.nome, email: userData.email, role: userData.role } } });
+    } catch (e: any) {
+      console.error('Login error:', e?.message);
+      if (e.code === 'auth/user-not-found') return _error('Usuário não encontrado', 404);
+      if (e.code === 'auth/wrong-password' || e.code === 'auth/invalid-credential') return _error('Credenciais inválidas', 401);
+      return _error('Erro ao fazer login', 500);
+    }
   }
+
   if (path === '/auth/me' && req.method === 'GET') {
-    const auth = await _requireAuth(req);
+    const auth = await requireAuth(req);
     if (auth.error) return auth.error;
     return _json({ success: true, data: auth.user });
   }
+
   if (path === '/auth/usuarios' && req.method === 'GET') {
-    const admin = await _requireAdmin(req);
+    const admin = await requireAdmin(req);
     if (admin.error) return admin.error;
-    const result = await _query('SELECT id, nome, email, role, cliente_id, ativo, created_at FROM usuarios ORDER BY created_at DESC');
-    return _json({ success: true, data: result.rows });
+    const snapshot = await _adminDb.collection('usuarios').orderBy('createdAt', 'desc').get();
+    const usuarios = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+    return _json({ success: true, data: usuarios });
   }
+
   if (path === '/auth/usuarios' && req.method === 'POST') {
-    const admin = await _requireAdmin(req);
+    const admin = await requireAdmin(req);
     if (admin.error) return admin.error;
     const body = await readBody(req);
     const { nome, email, senha, role, cliente_id } = body;
     if (!nome || !email || !senha) return _error('Nome, email e senha são obrigatórios', 400);
-    const existing = await _query('SELECT id FROM usuarios WHERE email = $1', [email]);
-    if (existing.rows[0]) return _error('Já existe um usuário com este email', 409);
-    const result = await _query(
-      `INSERT INTO usuarios (nome, email, senha_hash, role, cliente_id, ativo) VALUES ($1,$2,$3,$4,$5,1) RETURNING id, nome, email, role, cliente_id, ativo, created_at`,
-      [nome, email, _hashPassword(senha), role || 'cliente', cliente_id || null]
-    );
-    return _json({ success: true, data: result.rows[0], message: 'Usuário criado com sucesso' }, 201);
+    try {
+      const userRecord = await _adminAuth.createUser({ email, password: senha, displayName: nome });
+      await _adminDb.collection('usuarios').doc(userRecord.uid).set({
+        nome, email, role: role || 'cliente', clienteId: cliente_id || null, ativo: true, createdAt: Timestamp.now()
+      });
+      return _json({ success: true, data: { id: userRecord.uid, nome, email, role: role || 'cliente' }, message: 'Usuário criado com sucesso' }, 201);
+    } catch (e: any) {
+      console.error('Create user error:', e?.message);
+      if (e.code === 'auth/email-already-exists') return _error('Já existe um usuário com este email', 409);
+      return _error('Erro ao criar usuário', 500);
+    }
   }
+
   return _error('Rota de auth não encontrada', 404);
 }
 
 // ======================== EQUIPAMENTOS ========================
 async function handleEquipamentos(req: Request, path: string, params: Record<string, string>) {
-  const auth = await _requireAuth(req);
+  const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
   if (path === '/equipamentos/stats' && req.method === 'GET') {
-    const total = Number((await _query('SELECT COUNT(*) as count FROM equipamentos')).rows[0].count);
-    const subq = `SELECT l.equipamento_id, l.status_online FROM leituras l INNER JOIN (SELECT equipamento_id, MAX(data_leitura) as md FROM leituras GROUP BY equipamento_id) x ON l.equipamento_id=x.equipamento_id AND l.data_leitura=x.md`;
-    const online = Number((await _query(`SELECT COUNT(*) as count FROM (${subq}) WHERE status_online=1`)).rows[0].count);
-    const offline = Number((await _query(`SELECT COUNT(*) as count FROM (${subq}) WHERE status_online=0`)).rows[0].count);
-    const tonersBaixos = Number((await _query("SELECT COUNT(*) as count FROM suprimentos WHERE percentual<=20")).rows[0].count);
-    const alertasCriticos = Number((await _query("SELECT COUNT(*) as count FROM alertas WHERE resolvido=0 AND nivel='critical'")).rows[0].count);
+    const equipSnapshot = await _adminDb.collection('equipamentos').get();
+    const total = equipSnapshot.size;
+
+    const leiturasSnapshot = await _adminDb.collection('leituras').get();
+    const leiturasMap = new Map<string, any>();
+    leiturasSnapshot.docs.forEach((doc: any) => {
+      const data = doc.data();
+      const existing = leiturasMap.get(data.equipamentoId);
+      if (!existing || data.dataLeitura > existing.dataLeitura) {
+        leiturasMap.set(data.equipamentoId, data);
+      }
+    });
+
+    let online = 0, offline = 0;
+    leiturasMap.forEach((leitura: any) => {
+      if (leitura.statusOnline === 1) online++; else offline++;
+    });
+
+    const suprimentosSnapshot = await _adminDb.collection('suprimentos').where('percentual', '<=', 20).get();
+    const tonersBaixos = suprimentosSnapshot.size;
+
+    const alertasSnapshot = await _adminDb.collection('alertas').where('resolvido', '==', 0).where('nivel', '==', 'critical').get();
+    const alertasCriticos = alertasSnapshot.size;
+
     const now = new Date();
     const fd = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`;
-    const paginas = Number((await _query('SELECT COALESCE(SUM(contador_total),0) as total FROM leituras WHERE data_leitura>=$1',[fd])).rows[0].total);
-    const clientes = (await _query(`SELECT e.cliente, SUM(l.contador_total) as paginas FROM equipamentos e INNER JOIN leituras l ON l.equipamento_id=e.id WHERE l.data_leitura>=$1 GROUP BY e.cliente ORDER BY paginas DESC LIMIT 10`,[fd])).rows;
-    return _json({ success: true, data: { total_equipamentos: total, online, offline, toners_baixos: tonersBaixos, alertas_criticos: alertasCriticos, total_paginas_mes: paginas, clientes_maior_volume: clientes } });
+    let paginas = 0;
+    leiturasSnapshot.docs.forEach((doc: any) => {
+      const data = doc.data();
+      if (data.dataLeitura >= fd) paginas += data.contadorTotal || 0;
+    });
+
+    return _json({ success: true, data: { total_equipamentos: total, online, offline, toners_baixos: tonersBaixos, alertas_criticos: alertasCriticos, total_paginas_mes: paginas, clientes_maior_volume: [] } });
   }
 
   if (path === '/equipamentos' && req.method === 'GET') {
     const { cliente, status, search, page = '1', per_page = '10' } = params;
-    let countQ = 'SELECT COUNT(*) as count FROM equipamentos WHERE 1=1';
-    let q = `SELECT e.*, (SELECT COUNT(*) FROM alertas a WHERE a.equipamento_id=e.id AND a.resolvido=0) as alertas_ativos FROM equipamentos e WHERE 1=1`;
-    const p: any[] = [], cp: any[] = []; let pi = 1, cpi = 1;
-    if (cliente) { q += ` AND e.cliente=$${pi}`; countQ += ` AND cliente=$${cpi}`; p.push(cliente); cp.push(cliente); pi++; cpi++; }
-    if (status) { q += ` AND e.status_monitoramento=$${pi}`; countQ += ` AND status_monitoramento=$${cpi}`; p.push(status); cp.push(status); pi++; cpi++; }
-    if (search) { const s = `%${search}%`; q += ` AND (e.cliente LIKE $${pi} OR e.ip LIKE $${pi+1} OR e.modelo LIKE $${pi+2} OR e.numero_serie LIKE $${pi+3})`; countQ += ` AND (cliente LIKE $${cpi} OR ip LIKE $${cpi+1} OR modelo LIKE $${cpi+2} OR numero_serie LIKE $${cpi+3})`; p.push(s,s,s,s); cp.push(s,s,s,s); pi+=4; cpi+=4; }
-    const total = Number((await _query(countQ, cp)).rows[0].count);
-    const pn = Math.max(1, Number(page)), ppn = Math.max(1, Math.min(100, Number(per_page))), offset = (pn-1)*ppn;
-    q += ` ORDER BY e.created_at DESC LIMIT $${pi} OFFSET $${pi+1}`; p.push(ppn, offset);
-    return _json({ success: true, data: { data: (await _query(q, p)).rows, total } });
+    let query: FirebaseFirestore.Query = _adminDb.collection('equipamentos');
+    if (cliente) query = query.where('cliente', '==', cliente);
+    if (status) query = query.where('statusMonitoramento', '==', status);
+    query = query.orderBy('createdAt', 'desc');
+
+    const snapshot = await query.get();
+    let equipamentos = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+
+    if (search) {
+      const s = search.toLowerCase();
+      equipamentos = equipamentos.filter((e: any) =>
+        (e.cliente && e.cliente.toLowerCase().includes(s)) ||
+        (e.ip && e.ip.includes(s)) ||
+        (e.modelo && e.modelo.toLowerCase().includes(s)) ||
+        (e.numeroSerie && e.numeroSerie.toLowerCase().includes(s))
+      );
+    }
+
+    const total = equipamentos.length;
+    const pn = Math.max(1, Number(page)), ppn = Math.max(1, Math.min(100, Number(per_page)));
+    const offset = (pn - 1) * ppn;
+    const data = equipamentos.slice(offset, offset + ppn);
+
+    return _json({ success: true, data: { data, total } });
   }
 
-  if (path.match(/^\/equipamentos\/\d+$/) && req.method === 'GET') {
-    const id = getSegment(path, 1);
-    const equip = (await _query('SELECT * FROM equipamentos WHERE id=$1',[id])).rows[0];
-    if (!equip) return _error('Equipamento não encontrado', 404);
-    const leitura = (await _query('SELECT * FROM leituras WHERE equipamento_id=$1 ORDER BY data_leitura DESC LIMIT 1',[id])).rows[0];
-    const suprimentos = (await _query('SELECT * FROM suprimentos WHERE equipamento_id=$1',[id])).rows;
-    const config = (await _query('SELECT * FROM config_coleta WHERE equipamento_id=$1',[id])).rows[0];
-    return _json({ success: true, data: { ...equip, ultima_leitura: leitura || null, suprimentos, config_coleta: config || null } });
+  if (path.match(/^\/equipamentos\/[^\/]+$/) && req.method === 'GET') {
+    const id = getSegment(path, 1)!;
+    const doc = await _adminDb.collection('equipamentos').doc(id).get();
+    if (!doc.exists) return _error('Equipamento não encontrado', 404);
+    const equip = { id: doc.id, ...doc.data() };
+
+    const leiturasSnapshot = await _adminDb.collection('leituras').where('equipamentoId', '==', id).orderBy('dataLeitura', 'desc').limit(1).get();
+    const leitura = leiturasSnapshot.docs[0] ? { id: leiturasSnapshot.docs[0].id, ...leiturasSnapshot.docs[0].data() } : null;
+
+    const suprimentosSnapshot = await _adminDb.collection('suprimentos').where('equipamentoId', '==', id).get();
+    const suprimentos = suprimentosSnapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+
+    const configSnapshot = await _adminDb.collection('configColeta').where('equipamentoId', '==', id).limit(1).get();
+    const config = configSnapshot.docs[0] ? { id: configSnapshot.docs[0].id, ...configSnapshot.docs[0].data() } : null;
+
+    return _json({ success: true, data: { ...equip, ultima_leitura: leitura, suprimentos, config_coleta: config } });
   }
 
   if (path === '/equipamentos' && req.method === 'POST') {
     const body = await readBody(req);
-    const { cliente, unidade, ip, comunidade_snmp, fabricante, modelo, numero_serie, localizacao, contrato, status_monitoramento } = body;
+    const { cliente, unidade, ip, comunidade_snmp, fabricante, modelo, numero_serie, localizacao, contrato, status_monitoramento, agentId } = body;
     if (!cliente || !ip) return _error('Cliente e IP são obrigatórios', 400);
-    const result = await _query(`INSERT INTO equipamentos (cliente, unidade, ip, comunidade_snmp, fabricante, modelo, numero_serie, localizacao, contrato, status_monitoramento) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-      [cliente, unidade||null, ip, comunidade_snmp||'public', fabricante||null, modelo||null, numero_serie||null, localizacao||null, contrato||null, status_monitoramento||'ativo']);
-    return _json({ success: true, data: result.rows[0], message: 'Equipamento criado com sucesso' }, 201);
+    const docRef = await _adminDb.collection('equipamentos').add({
+      cliente, unidade: unidade || null, ip, comunidadeSnmp: comunidade_snmp || 'public', fabricante: fabricante || null,
+      modelo: modelo || null, numeroSerie: numero_serie || null, localizacao: localizacao || null, contrato: contrato || null,
+      statusMonitoramento: status_monitoramento || 'ativo', agentId: agentId || null, createdAt: Timestamp.now(), updatedAt: Timestamp.now()
+    });
+    const doc = await docRef.get();
+    return _json({ success: true, data: { id: doc.id, ...doc.data() }, message: 'Equipamento criado com sucesso' }, 201);
   }
 
-  if (path.match(/^\/equipamentos\/\d+$/) && req.method === 'PUT') {
-    const id = getSegment(path, 1);
+  if (path.match(/^\/equipamentos\/[^\/]+$/) && req.method === 'PUT') {
+    const id = getSegment(path, 1)!;
     const body = await readBody(req);
-    const existing = (await _query('SELECT * FROM equipamentos WHERE id=$1',[id])).rows[0];
-    if (!existing) return _error('Equipamento não encontrado', 404);
-    const result = await _query(`UPDATE equipamentos SET cliente=$1, unidade=$2, ip=$3, comunidade_snmp=$4, fabricante=$5, modelo=$6, numero_serie=$7, localizacao=$8, contrato=$9, status_monitoramento=$10, updated_at=(NOW() AT TIME ZONE 'UTC')::text WHERE id=$11 RETURNING *`,
-      [body.cliente||existing.cliente, body.unidade||existing.unidade, body.ip||existing.ip, body.comunidade_snmp||existing.comunidade_snmp, body.fabricante||existing.fabricante, body.modelo||existing.modelo, body.numero_serie||existing.numero_serie, body.localizacao||existing.localizacao, body.contrato||existing.contrato, body.status_monitoramento||existing.status_monitoramento, id]);
-    return _json({ success: true, data: result.rows[0], message: 'Equipamento atualizado com sucesso' });
+    const doc = await _adminDb.collection('equipamentos').doc(id).get();
+    if (!doc.exists) return _error('Equipamento não encontrado', 404);
+    const existing = doc.data();
+    const updateData: any = { updatedAt: Timestamp.now() };
+    if (body.cliente !== undefined) updateData.cliente = body.cliente;
+    if (body.unidade !== undefined) updateData.unidade = body.unidade;
+    if (body.ip !== undefined) updateData.ip = body.ip;
+    if (body.comunidade_snmp !== undefined) updateData.comunidadeSnmp = body.comunidade_snmp;
+    if (body.fabricante !== undefined) updateData.fabricante = body.fabricante;
+    if (body.modelo !== undefined) updateData.modelo = body.modelo;
+    if (body.numero_serie !== undefined) updateData.numeroSerie = body.numero_serie;
+    if (body.localizacao !== undefined) updateData.localizacao = body.localizacao;
+    if (body.contrato !== undefined) updateData.contrato = body.contrato;
+    if (body.status_monitoramento !== undefined) updateData.statusMonitoramento = body.status_monitoramento;
+    if (body.agentId !== undefined) updateData.agentId = body.agentId;
+    await _adminDb.collection('equipamentos').doc(id).update(updateData);
+    const updated = await _adminDb.collection('equipamentos').doc(id).get();
+    return _json({ success: true, data: { id: updated.id, ...updated.data() }, message: 'Equipamento atualizado com sucesso' });
   }
 
-  if (path.match(/^\/equipamentos\/\d+$/) && req.method === 'DELETE') {
-    const id = getSegment(path, 1);
-    const existing = (await _query('SELECT * FROM equipamentos WHERE id=$1',[id])).rows[0];
-    if (!existing) return _error('Equipamento não encontrado', 404);
-    await _query('DELETE FROM equipamentos WHERE id=$1',[id]);
+  if (path.match(/^\/equipamentos\/[^\/]+$/) && req.method === 'DELETE') {
+    const id = getSegment(path, 1)!;
+    const doc = await _adminDb.collection('equipamentos').doc(id).get();
+    if (!doc.exists) return _error('Equipamento não encontrado', 404);
+    await _adminDb.collection('equipamentos').doc(id).delete();
     return _json({ success: true, message: 'Equipamento excluído com sucesso' });
   }
 
-  if (path.match(/^\/equipamentos\/\d+\/collect$/) && req.method === 'POST') {
-    const id = parseInt(getSegment(path, 1)!);
-    const equip = (await _query('SELECT * FROM equipamentos WHERE id=$1',[id])).rows[0];
-    if (!equip) return _error('Equipamento não encontrado', 404);
+  if (path.match(/^\/equipamentos\/[^\/]+\/collect$/) && req.method === 'POST') {
+    const id = getSegment(path, 1)!;
+    const doc = await _adminDb.collection('equipamentos').doc(id).get();
+    if (!doc.exists) return _error('Equipamento não encontrado', 404);
+    const equip = { id: doc.id, ...doc.data() } as any;
 
     if (isPrivateIP(equip.ip)) {
-      if (!equip.agent_id) {
+      if (!equip.agentId) {
         return _json({ success: false, data: {
-          reason: 'private_ip_no_agent',
-          ip: equip.ip,
+          reason: 'private_ip_no_agent', ip: equip.ip,
           hint: 'Este equipamento possui IP privado e não possui um Onyx Agent configurado. Instale um Onyx Agent na rede do cliente e vincule-o a este equipamento para permitir a coleta remota.',
           agent_required: true
         }, message: 'IP privado detectado. A coleta direta não é possível. Um Onyx Agent é necessário.' }, 400);
       }
-      const agent = (await _query(`SELECT a.id, a.name, a.status, a.last_heartbeat FROM agents a WHERE a.id=$1 AND a.status='active'`,[equip.agent_id])).rows[0];
-      if (!agent) return _json({ success: false, data: {
-        reason: 'private_ip_no_agent',
-        ip: equip.ip,
+      const agentDoc = await _adminDb.collection('agents').doc(equip.agentId).get();
+      if (!agentDoc.exists || agentDoc.data()?.status !== 'active') return _json({ success: false, data: {
+        reason: 'private_ip_no_agent', ip: equip.ip,
         hint: 'O Agent vinculado não está ativo. Verifique o status do Agent ou vincule um novo Agent a este equipamento.',
         agent_required: true
       }, message: 'Agent vinculado não encontrado ou inativo.' }, 400);
-      const lastHb = agent.last_heartbeat ? new Date(agent.last_heartbeat).getTime() : 0;
+      const agent = { id: agentDoc.id, ...agentDoc.data() } as any;
+      const lastHb = agent.lastHeartbeat?.toDate?.()?.getTime() || 0;
       if (lastHb < Date.now() - 10*60*1000) return _json({ success: false, data: {
-        reason: 'agent_offline',
-        agent_name: agent.name,
+        reason: 'agent_offline', agent_name: agent.name,
         hint: `O Agent "${agent.name}" não envia heartbeat há mais de 10 minutos. Verifique se está rodando na rede do cliente.`
       }, message: `Agent "${agent.name}" parece estar offline (sem heartbeat há ${Math.round((Date.now()-lastHb)/60000)} minutos).` }, 400);
-      await _query(`INSERT INTO agent_logs (agent_id, level, message, details) VALUES ($1,'info',$2,$3)`,[agent.id, `Coleta solicitada para ${equip.ip}`, JSON.stringify({ equipamento_id: equip.id })]);
+      await _adminDb.collection('agentLogs').add({ agentId: agent.id, level: 'info', message: `Coleta solicitada para ${equip.ip}`, details: { equipamentoId: equip.id }, createdAt: Timestamp.now() });
       return _json({ success: true, data: {
-        reason: 'routed_to_agent',
-        agent_id: agent.id,
-        agent_name: agent.name,
+        reason: 'routed_to_agent', agent_id: agent.id, agent_name: agent.name,
         hint: 'O Agent coletará os dados automaticamente e os enviará ao servidor.'
       }, message: `Coleta enviada ao Agent "${agent.name}". Aguarde a sincronização automática.` });
     }
@@ -309,26 +365,21 @@ async function handleEquipamentos(req: Request, path: string, params: Record<str
     try {
       const snmp = await import('net-snmp');
       const OIDS = {
-        totalCounter: '1.3.6.1.2.1.43.10.2.1.4.1.1',
-        colorCounter: '1.3.6.1.2.1.43.10.2.1.4.1.2',
-        tonerBlack: '1.3.6.1.2.1.43.11.1.1.9.1.1',
-        tonerCyan: '1.3.6.1.2.1.43.11.1.1.9.1.2',
-        tonerMagenta: '1.3.6.1.2.1.43.11.1.1.9.1.3',
-        tonerYellow: '1.3.6.1.2.1.43.11.1.1.9.1.4',
-        printerName: '1.3.6.1.2.1.25.3.2.1.3.1',
-        serialNumber: '1.3.6.1.2.1.43.5.1.1.17.1',
+        totalCounter: '1.3.6.1.2.1.43.10.2.1.4.1.1', colorCounter: '1.3.6.1.2.1.43.10.2.1.4.1.2',
+        tonerBlack: '1.3.6.1.2.1.43.11.1.1.9.1.1', tonerCyan: '1.3.6.1.2.1.43.11.1.1.9.1.2',
+        tonerMagenta: '1.3.6.1.2.1.43.11.1.1.9.1.3', tonerYellow: '1.3.6.1.2.1.43.11.1.1.9.1.4',
+        printerName: '1.3.6.1.2.1.25.3.2.1.3.1', serialNumber: '1.3.6.1.2.1.43.5.1.1.17.1',
         errorState: '1.3.6.1.2.1.25.3.5.1.1.1',
       };
       const printerData = await new Promise<any>((resolve, reject) => {
-        const session = snmp.createSession(equip.ip, equip.comunidade_snmp || 'public', { timeout: 5000, retries: 1, version: snmp.Version2c });
+        const session = snmp.createSession(equip.ip, equip.comunidadeSnmp || 'public', { timeout: 5000, retries: 1, version: snmp.Version2c });
         session.get(Object.values(OIDS), (error: any, varbinds: any) => {
           session.close();
           if (error) return reject(new Error(`SNMP error for ${equip.ip}: ${error.message}`));
           const r: Record<string, any> = {};
           Object.keys(OIDS).forEach((k, i) => { r[k] = varbinds?.[i]?.value ?? 0; });
           resolve({
-            online: true,
-            contador_total: Number(r.totalCounter) || 0, contador_pb: Number(r.totalCounter) || 0,
+            online: true, contador_total: Number(r.totalCounter) || 0, contador_pb: Number(r.totalCounter) || 0,
             contador_cor: Number(r.colorCounter) || 0, toner_preto: 50, toner_ciano: 50,
             toner_magenta: 50, toner_amarelo: 50, nome_equip: String(r.printerName || ''),
             numero_serie: String(r.serialNumber || ''), modelo_equip: String(r.printerName || ''),
@@ -336,19 +387,26 @@ async function handleEquipamentos(req: Request, path: string, params: Record<str
           });
         });
       });
-      await _query(`INSERT INTO leituras (equipamento_id, contador_total, contador_pb, contador_cor, toner_preto, toner_ciano, toner_magenta, toner_amarelo, status_online, mensagens_erro, numero_serie_equip, modelo_equip, nome_equip) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-        [id, printerData.contador_total, printerData.contador_pb, printerData.contador_cor, printerData.toner_preto, printerData.toner_ciano, printerData.toner_magenta, printerData.toner_amarelo, 1, printerData.mensagens_erro, printerData.numero_serie, printerData.modelo_equip, printerData.nome_equip]);
+      await _adminDb.collection('leituras').add({
+        equipamentoId: id, dataLeitura: new Date().toISOString().split('T')[0],
+        contadorTotal: printerData.contador_total, contadorPb: printerData.contador_pb, contadorCor: printerData.contador_cor,
+        tonerPreto: printerData.toner_preto, tonerCiano: printerData.toner_ciano, tonerMagenta: printerData.toner_magenta, tonerAmarelo: printerData.toner_amarelo,
+        statusOnline: 1, mensagensErro: printerData.mensagens_erro, numeroSerieEquip: printerData.numero_serie,
+        modeloEquip: printerData.modelo_equip, nomeEquip: printerData.nome_equip, createdAt: Timestamp.now()
+      });
       const toners = [{t:'preto',p:printerData.toner_preto},{t:'ciano',p:printerData.toner_ciano},{t:'magenta',p:printerData.toner_magenta},{t:'amarelo',p:printerData.toner_amarelo}];
       for (const toner of toners) {
-        const ex = (await _query('SELECT id FROM suprimentos WHERE equipamento_id=$1 AND tipo=$2',[id,toner.t])).rows[0];
-        if (ex) await _query(`UPDATE suprimentos SET percentual=$1, ultima_leitura=(NOW() AT TIME ZONE 'UTC')::text, updated_at=(NOW() AT TIME ZONE 'UTC')::text WHERE id=$2`,[toner.p,ex.id]);
-        else await _query('INSERT INTO suprimentos (equipamento_id,tipo,percentual) VALUES ($1,$2,$3)',[id,toner.t,toner.p]);
+        const exSnapshot = await _adminDb.collection('suprimentos').where('equipamentoId', '==', id).where('tipo', '==', toner.t).limit(1).get();
+        if (exSnapshot.docs[0]) {
+          await _adminDb.collection('suprimentos').doc(exSnapshot.docs[0].id).update({ percentual: toner.p, ultimaLeitura: new Date().toISOString(), updatedAt: Timestamp.now() });
+        } else {
+          await _adminDb.collection('suprimentos').add({ equipamentoId: id, tipo: toner.t, percentual: toner.p, createdAt: Timestamp.now(), updatedAt: Timestamp.now() });
+        }
       }
       return _json({ success: true, data: printerData, message: 'Coleta realizada com sucesso' });
     } catch (snmpErr: any) {
       return _json({ success: false, data: {
-        reason: 'snmp_timeout',
-        ip: equip.ip,
+        reason: 'snmp_timeout', ip: equip.ip,
         hint: 'A impressora pode estar desligada, fora da rede, ou com o SNMP desabilitado. Verifique a conectividade de rede.'
       }, message: `Falha ao coletar via SNMP: ${snmpErr?.message || 'Erro desconhecido'}` }, 400);
     }
@@ -359,35 +417,40 @@ async function handleEquipamentos(req: Request, path: string, params: Record<str
 
 // ======================== LEITURAS ========================
 async function handleLeituras(req: Request, path: string, params: Record<string, string>) {
-  const auth = await _requireAuth(req);
+  const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
   if (path === '/leituras' && req.method === 'GET') {
     const { equipamento_id, data_inicio, data_fim, page = '1', limit = '50' } = params;
-    let q = `SELECT l.*, e.cliente, e.modelo, e.numero_serie FROM leituras l LEFT JOIN equipamentos e ON l.equipamento_id=e.id WHERE 1=1`;
-    const p: any[] = []; let pi = 1;
-    if (equipamento_id) { q += ` AND l.equipamento_id=$${pi}`; p.push(equipamento_id); pi++; }
-    if (data_inicio) { q += ` AND l.data_leitura>=$${pi}`; p.push(data_inicio); pi++; }
-    if (data_fim) { q += ` AND l.data_leitura<=$${pi}`; p.push(data_fim); pi++; }
-    const countQ = q.replace('SELECT l.*, e.cliente, e.modelo, e.numero_serie', 'SELECT COUNT(*) as total');
-    const total = Number((await _query(countQ, p)).rows[0].total);
-    const offset = (Number(page)-1)*Number(limit);
-    q += ` ORDER BY l.data_leitura DESC LIMIT $${pi} OFFSET $${pi+1}`; p.push(Number(limit), offset);
-    return _json({ success: true, data: { data: (await _query(q, p)).rows, total } });
+    let query: FirebaseFirestore.Query = _adminDb.collection('leituras');
+    if (equipamento_id) query = query.where('equipamentoId', '==', equipamento_id);
+    if (data_inicio) query = query.where('dataLeitura', '>=', data_inicio);
+    if (data_fim) query = query.where('dataLeitura', '<=', data_fim);
+    query = query.orderBy('dataLeitura', 'desc');
+
+    const snapshot = await query.get();
+    const total = snapshot.size;
+    const offset = (Number(page) - 1) * Number(limit);
+    const data = snapshot.docs.slice(offset, offset + Number(limit)).map((doc: any) => ({ id: doc.id, ...doc.data() }));
+
+    return _json({ success: true, data: { data, total } });
   }
 
-  if (path.match(/^\/leituras\/equipamento\/\d+$/) && req.method === 'GET') {
-    const id = getSegment(path, 2);
+  if (path.match(/^\/leituras\/equipamento\/[^\/]+$/) && req.method === 'GET') {
+    const id = getSegment(path, 2)!;
     const { page = '1', limit = '100' } = params;
-    const total = Number((await _query('SELECT COUNT(*) as total FROM leituras WHERE equipamento_id=$1',[id])).rows[0].total);
-    const offset = (Number(page)-1)*Number(limit);
-    return _json({ success: true, data: (await _query('SELECT * FROM leituras WHERE equipamento_id=$1 ORDER BY data_leitura DESC LIMIT $2 OFFSET $3',[id,Number(limit),offset])).rows });
+    const snapshot = await _adminDb.collection('leituras').where('equipamentoId', '==', id).orderBy('dataLeitura', 'desc').get();
+    const total = snapshot.size;
+    const offset = (Number(page) - 1) * Number(limit);
+    const data = snapshot.docs.slice(offset, offset + Number(limit)).map((doc: any) => ({ id: doc.id, ...doc.data() }));
+    return _json({ success: true, data });
   }
 
-  if (path.match(/^\/leituras\/\d+$/) && req.method === 'GET') {
-    const result = await _query(`SELECT l.*, e.cliente, e.modelo, e.numero_serie, e.ip FROM leituras l LEFT JOIN equipamentos e ON l.equipamento_id=e.id WHERE l.id=$1`,[getSegment(path,1)]);
-    if (!result.rows[0]) return _error('Leitura não encontrada', 404);
-    return _json({ success: true, data: result.rows[0] });
+  if (path.match(/^\/leituras\/[^\/]+$/) && req.method === 'GET') {
+    const id = getSegment(path, 1)!;
+    const doc = await _adminDb.collection('leituras').doc(id).get();
+    if (!doc.exists) return _error('Leitura não encontrada', 404);
+    return _json({ success: true, data: { id: doc.id, ...doc.data() } });
   }
 
   return _error('Rota de leituras não encontrada', 404);
@@ -395,30 +458,36 @@ async function handleLeituras(req: Request, path: string, params: Record<string,
 
 // ======================== SUPRIMENTOS ========================
 async function handleSuprimentos(req: Request, path: string, params: Record<string, string>) {
-  const auth = await _requireAuth(req);
+  const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
   if (path === '/suprimentos' && req.method === 'GET') {
     const { equipamento_id, tipo } = params;
-    let q = `SELECT s.*, e.cliente, e.modelo, e.numero_serie, e.ip FROM suprimentos s LEFT JOIN equipamentos e ON s.equipamento_id=e.id WHERE 1=1`;
-    const p: any[] = []; let pi = 1;
-    if (equipamento_id) { q += ` AND s.equipamento_id=$${pi}`; p.push(equipamento_id); pi++; }
-    if (tipo) { q += ` AND s.tipo=$${pi}`; p.push(tipo); pi++; }
-    return _json({ success: true, data: (await _query(q + ' ORDER BY s.percentual ASC', p)).rows });
+    let query: FirebaseFirestore.Query = _adminDb.collection('suprimentos');
+    if (equipamento_id) query = query.where('equipamentoId', '==', equipamento_id);
+    if (tipo) query = query.where('tipo', '==', tipo);
+    query = query.orderBy('percentual', 'asc');
+    const snapshot = await query.get();
+    return _json({ success: true, data: snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() })) });
   }
 
-  if (path.match(/^\/suprimentos\/equipamento\/\d+$/) && req.method === 'GET') {
-    return _json({ success: true, data: (await _query('SELECT * FROM suprimentos WHERE equipamento_id=$1',[getSegment(path,2)])).rows });
+  if (path.match(/^\/suprimentos\/equipamento\/[^\/]+$/) && req.method === 'GET') {
+    const id = getSegment(path, 2)!;
+    const snapshot = await _adminDb.collection('suprimentos').where('equipamentoId', '==', id).get();
+    return _json({ success: true, data: snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() })) });
   }
 
-  if (path.match(/^\/suprimentos\/\d+$/) && req.method === 'PUT') {
-    const id = getSegment(path, 1);
+  if (path.match(/^\/suprimentos\/[^\/]+$/) && req.method === 'PUT') {
+    const id = getSegment(path, 1)!;
     const body = await readBody(req);
-    const existing = (await _query('SELECT * FROM suprimentos WHERE id=$1',[id])).rows[0];
-    if (!existing) return _error('Suprimento não encontrado', 404);
-    const result = await _query(`UPDATE suprimentos SET percentual=$1, previsao_troca=$2, updated_at=(NOW() AT TIME ZONE 'UTC')::text WHERE id=$3 RETURNING *`,
-      [body.percentual!==undefined?body.percentual:existing.percentual, body.previsao_troca!==undefined?body.previsao_troca:existing.previsao_troca, id]);
-    return _json({ success: true, data: result.rows[0], message: 'Suprimento atualizado com sucesso' });
+    const doc = await _adminDb.collection('suprimentos').doc(id).get();
+    if (!doc.exists) return _error('Suprimento não encontrado', 404);
+    const updateData: any = { updatedAt: Timestamp.now() };
+    if (body.percentual !== undefined) updateData.percentual = body.percentual;
+    if (body.previsao_troca !== undefined) updateData.previsaoTroca = body.previsao_troca;
+    await _adminDb.collection('suprimentos').doc(id).update(updateData);
+    const updated = await _adminDb.collection('suprimentos').doc(id).get();
+    return _json({ success: true, data: { id: updated.id, ...updated.data() }, message: 'Suprimento atualizado com sucesso' });
   }
 
   return _error('Rota de suprimentos não encontrada', 404);
@@ -426,41 +495,46 @@ async function handleSuprimentos(req: Request, path: string, params: Record<stri
 
 // ======================== ALERTAS ========================
 async function handleAlertas(req: Request, path: string, params: Record<string, string>) {
-  const auth = await _requireAuth(req);
+  const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
   if (path === '/alertas/stats' && req.method === 'GET') {
-    const total = Number((await _query('SELECT COUNT(*) as count FROM alertas')).rows[0].count);
-    const ativos = Number((await _query('SELECT COUNT(*) as count FROM alertas WHERE resolvido=0')).rows[0].count);
-    const criticos = Number((await _query("SELECT COUNT(*) as count FROM alertas WHERE resolvido=0 AND nivel='critical'")).rows[0].count);
-    const warnings = Number((await _query("SELECT COUNT(*) as count FROM alertas WHERE resolvido=0 AND nivel='warning'")).rows[0].count);
-    const infos = Number((await _query("SELECT COUNT(*) as count FROM alertas WHERE resolvido=0 AND nivel='info'")).rows[0].count);
-    const porTipo = (await _query("SELECT tipo, COUNT(*) as count FROM alertas WHERE resolvido=0 GROUP BY tipo ORDER BY count DESC")).rows;
-    const ultimos = (await _query(`SELECT a.*, e.cliente, e.modelo FROM alertas a LEFT JOIN equipamentos e ON a.equipamento_id=e.id ORDER BY a.created_at DESC LIMIT 10`)).rows;
-    return _json({ success: true, data: { total, ativos, criticos, warnings, infos, por_tipo: porTipo, ultimos_alertas: ultimos } });
+    const snapshot = await _adminDb.collection('alertas').get();
+    const alertas = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+    const total = alertas.length;
+    const ativos = alertas.filter((a: any) => a.resolvido === 0).length;
+    const criticos = alertas.filter((a: any) => a.resolvido === 0 && a.nivel === 'critical').length;
+    const warnings = alertas.filter((a: any) => a.resolvido === 0 && a.nivel === 'warning').length;
+    const infos = alertas.filter((a: any) => a.resolvido === 0 && a.nivel === 'info').length;
+    const porTipo = alertas.filter((a: any) => a.resolvido === 0).reduce((acc: any, a: any) => { acc[a.tipo] = (acc[a.tipo] || 0) + 1; return acc; }, {});
+    const ultimos = alertas.filter((a: any) => a.resolvido === 0).sort((a: any, b: any) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0)).slice(0, 10);
+    return _json({ success: true, data: { total, ativos, criticos, warnings, infos, por_tipo: Object.entries(porTipo).map(([tipo, count]) => ({ tipo, count })), ultimos_alertas: ultimos } });
   }
 
   if (path === '/alertas' && req.method === 'GET') {
     const { tipo, nivel, resolvido, equipamento_id, page = '1', limit = '50' } = params;
-    let q = `SELECT a.*, e.cliente, e.modelo, e.numero_serie, e.ip FROM alertas a LEFT JOIN equipamentos e ON a.equipamento_id=e.id WHERE 1=1`;
-    const p: any[] = []; let pi = 1;
-    if (tipo) { q += ` AND a.tipo=$${pi}`; p.push(tipo); pi++; }
-    if (nivel) { q += ` AND a.nivel=$${pi}`; p.push(nivel); pi++; }
-    if (resolvido !== undefined) { q += ` AND a.resolvido=$${pi}`; p.push(resolvido==='true'?1:0); pi++; }
-    if (equipamento_id) { q += ` AND a.equipamento_id=$${pi}`; p.push(equipamento_id); pi++; }
-    const countQ = q.replace('SELECT a.*, e.cliente, e.modelo, e.numero_serie, e.ip','SELECT COUNT(*) as total');
-    const total = Number((await _query(countQ, p)).rows[0].total);
-    const offset = (Number(page)-1)*Number(limit);
-    q += ` ORDER BY a.created_at DESC LIMIT $${pi} OFFSET $${pi+1}`; p.push(Number(limit), offset);
-    return _json({ success: true, data: { data: (await _query(q, p)).rows, total } });
+    let query: FirebaseFirestore.Query = _adminDb.collection('alertas');
+    if (tipo) query = query.where('tipo', '==', tipo);
+    if (nivel) query = query.where('nivel', '==', nivel);
+    if (resolvido !== undefined) query = query.where('resolvido', '==', resolvido === 'true' ? 1 : 0);
+    if (equipamento_id) query = query.where('equipamentoId', '==', equipamento_id);
+    query = query.orderBy('createdAt', 'desc');
+
+    const snapshot = await query.get();
+    const total = snapshot.size;
+    const offset = (Number(page) - 1) * Number(limit);
+    const data = snapshot.docs.slice(offset, offset + Number(limit)).map((doc: any) => ({ id: doc.id, ...doc.data() }));
+
+    return _json({ success: true, data: { data, total } });
   }
 
-  if (path.match(/^\/alertas\/\d+\/resolver$/) && req.method === 'PUT') {
-    const id = getSegment(path, 1);
-    const existing = (await _query('SELECT * FROM alertas WHERE id=$1',[id])).rows[0];
-    if (!existing) return _error('Alerta não encontrado', 404);
-    const result = await _query(`UPDATE alertas SET resolvido=1, resolvido_em=(NOW() AT TIME ZONE 'UTC')::text WHERE id=$1 RETURNING *`,[id]);
-    return _json({ success: true, data: result.rows[0], message: 'Alerta resolvido com sucesso' });
+  if (path.match(/^\/alertas\/[^\/]+\/resolver$/) && req.method === 'PUT') {
+    const id = getSegment(path, 1)!;
+    const doc = await _adminDb.collection('alertas').doc(id).get();
+    if (!doc.exists) return _error('Alerta não encontrado', 404);
+    await _adminDb.collection('alertas').doc(id).update({ resolvido: 1, resolvidoEm: Timestamp.now() });
+    const updated = await _adminDb.collection('alertas').doc(id).get();
+    return _json({ success: true, data: { id: updated.id, ...updated.data() }, message: 'Alerta resolvido com sucesso' });
   }
 
   return _error('Rota de alertas não encontrada', 404);
@@ -468,29 +542,72 @@ async function handleAlertas(req: Request, path: string, params: Record<string, 
 
 // ======================== RELATORIOS ========================
 async function handleRelatorios(req: Request, path: string, params: Record<string, string>) {
-  const auth = await _requireAuth(req);
+  const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
   if (path === '/relatorios/mensal' && req.method === 'GET') {
     const { mes, ano, cliente } = params;
     const cm = mes ? Number(mes) : new Date().getMonth()+1, cy = ano ? Number(ano) : new Date().getFullYear();
     const sd = `${cy}-${String(cm).padStart(2,'0')}-01`, ed = `${cy}-${String(cm).padStart(2,'0')}-31`;
-    let q = `SELECT e.cliente, e.modelo, e.numero_serie, e.ip, COUNT(l.id) as total_leituras, MAX(l.contador_total)-MIN(l.contador_total) as impressions_month, MAX(l.contador_pb)-MIN(l.contador_pb) as pb_month, MAX(l.contador_cor)-MIN(l.contador_cor) as color_month, AVG(l.toner_preto) as avg_toner_preto, AVG(l.toner_ciano) as avg_toner_ciano, AVG(l.toner_magenta) as avg_toner_magenta, AVG(l.toner_amarelo) as avg_toner_amarelo FROM leituras l LEFT JOIN equipamentos e ON l.equipamento_id=e.id WHERE l.data_leitura>=$1 AND l.data_leitura<=$2`;
-    const p: any[] = [sd,ed]; let pi = 3;
-    if (cliente) { q += ` AND e.cliente=$${pi}`; p.push(cliente); pi++; }
-    q += ' GROUP BY e.id ORDER BY e.cliente, e.modelo';
-    return _json({ success: true, data: { periodo: { mes: cm, ano: cy, startDate: sd, endDate: ed }, detalhes: (await _query(q, p)).rows } });
+
+    let equipQuery: FirebaseFirestore.Query = _adminDb.collection('equipamentos');
+    if (cliente) equipQuery = equipQuery.where('cliente', '==', cliente);
+    const equipSnapshot = await equipQuery.get();
+
+    const detalhes = [];
+    for (const equipDoc of equipSnapshot.docs) {
+      const equip = { id: equipDoc.id, ...equipDoc.data() } as any;
+      const leiturasSnapshot = await _adminDb.collection('leituras')
+        .where('equipamentoId', '==', equip.id)
+        .where('dataLeitura', '>=', sd)
+        .where('dataLeitura', '<=', ed)
+        .orderBy('dataLeitura', 'asc')
+        .get();
+
+      if (leiturasSnapshot.size === 0) continue;
+
+      const leituras = leiturasSnapshot.docs.map((doc: any) => doc.data());
+      const first = leituras[0], last = leituras[leituras.length - 1];
+
+      detalhes.push({
+        cliente: equip.cliente, modelo: equip.modelo, numero_serie: equip.numeroSerie, ip: equip.ip,
+        total_leituras: leiturasSnapshot.size,
+        impressions_month: (last.contadorTotal || 0) - (first.contadorTotal || 0),
+        pb_month: (last.contadorPb || 0) - (first.contadorPb || 0),
+        color_month: (last.contadorCor || 0) - (first.contadorCor || 0),
+        avg_toner_preto: leituras.reduce((sum: number, l: any) => sum + (l.tonerPreto || 0), 0) / leituras.length,
+        avg_toner_ciano: leituras.reduce((sum: number, l: any) => sum + (l.tonerCiano || 0), 0) / leituras.length,
+        avg_toner_magenta: leituras.reduce((sum: number, l: any) => sum + (l.tonerMagenta || 0), 0) / leituras.length,
+        avg_toner_amarelo: leituras.reduce((sum: number, l: any) => sum + (l.tonerAmarelo || 0), 0) / leituras.length,
+      });
+    }
+
+    return _json({ success: true, data: { periodo: { mes: cm, ano: cy, startDate: sd, endDate: ed }, detalhes } });
   }
 
   if (path === '/relatorios/export/excel' && req.method === 'GET') {
     const { cliente, data_inicio, data_fim } = params;
-    let q = `SELECT e.cliente, e.unidade, e.ip, e.modelo, e.numero_serie, l.data_leitura, l.contador_total, l.contador_pb, l.contador_cor, l.toner_preto, l.toner_ciano, l.toner_magenta, l.toner_amarelo, l.status_online FROM leituras l LEFT JOIN equipamentos e ON l.equipamento_id=e.id WHERE 1=1`;
-    const p: any[] = []; let pi = 1;
-    if (cliente) { q += ` AND e.cliente=$${pi}`; p.push(cliente); pi++; }
-    if (data_inicio) { q += ` AND l.data_leitura>=$${pi}`; p.push(data_inicio); pi++; }
-    if (data_fim) { q += ` AND l.data_leitura<=$${pi}`; p.push(data_fim); pi++; }
-    q += ' ORDER BY e.cliente, l.data_leitura DESC';
-    const rows = (await _query(q, p)).rows;
+    let query: FirebaseFirestore.Query = _adminDb.collection('leituras');
+    if (data_inicio) query = query.where('dataLeitura', '>=', data_inicio);
+    if (data_fim) query = query.where('dataLeitura', '<=', data_fim);
+    query = query.orderBy('dataLeitura', 'desc');
+    const snapshot = await query.get();
+
+    const rows = [];
+    for (const doc of snapshot.docs) {
+      const leitura = doc.data();
+      const equipDoc = await _adminDb.collection('equipamentos').doc(leitura.equipamentoId).get();
+      const equip = equipDoc.data();
+      if (cliente && equip?.cliente !== cliente) continue;
+      rows.push({
+        cliente: equip?.cliente || '', unidade: equip?.unidade || '', ip: equip?.ip || '', modelo: equip?.modelo || '',
+        numero_serie: equip?.numeroSerie || '', data_leitura: leitura.dataLeitura, contador_total: leitura.contadorTotal,
+        contador_pb: leitura.contadorPb, contador_cor: leitura.contadorCor, toner_preto: leitura.tonerPreto,
+        toner_ciano: leitura.tonerCiano, toner_magenta: leitura.tonerMagenta, toner_amarelo: leitura.tonerAmarelo,
+        status_online: leitura.statusOnline,
+      });
+    }
+
     if (!rows.length) return _error('Nenhum dado encontrado', 404);
     const headers = Object.keys(rows[0]);
     const csvRows = ['\uFEFF'+headers.join(';'), ...rows.map((r: any) => headers.map(h => { const v=r[h]; if(v===null||v===undefined) return ''; const s=String(v); return s.includes(';')||s.includes('"')||s.includes('\n')?`"${s.replace(/"/g,'""')}"`:s; }).join(';'))];
@@ -508,30 +625,39 @@ async function handleAgents(req: Request, path: string, params: Record<string, s
     if (!name || !company_id) return _error('Nome e company_id são obrigatórios', 400);
     const crypto = await import('crypto');
     const apiKey = crypto.randomBytes(32).toString('hex');
-    const result = await _query(`INSERT INTO agents (name, company_id, location, ip_address, api_key, version, status) VALUES ($1,$2,$3,$4,$5,$6,'active') RETURNING id, name, company_id, api_key, status, created_at`,
-      [name, company_id, location||null, ip_address||null, apiKey, version||'1.0.0']);
-    return _json({ success: true, data: result.rows[0], message: 'Agent registrado com sucesso' }, 201);
+    const docRef = await _adminDb.collection('agents').add({
+      name, companyId: company_id, location: location || null, ipAddress: ip_address || null,
+      apiKey, version: version || '1.0.0', status: 'active', config: {},
+      createdAt: Timestamp.now(), updatedAt: Timestamp.now()
+    });
+    const doc = await docRef.get();
+    return _json({ success: true, data: { id: doc.id, ...doc.data() }, message: 'Agent registrado com sucesso' }, 201);
   }
 
-  const agentMatch = path.match(/^\/agents\/(\d+)\/(heartbeat|config|collect|logs)$/);
+  const agentMatch = path.match(/^\/agents\/([^\/]+)\/(heartbeat|config|collect|logs)$/);
   if (agentMatch) {
     const authHeader = req.headers.get('authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) return _error('Token não fornecido', 401);
     const apiKey = authHeader.split(' ')[1];
-    const agent = (await _query('SELECT id, name, status FROM agents WHERE api_key=$1',[apiKey])).rows[0];
-    if (!agent) return _error('API Key inválida', 401);
+    const agentsSnapshot = await _adminDb.collection('agents').where('apiKey', '==', apiKey).limit(1).get();
+    if (agentsSnapshot.empty) return _error('API Key inválida', 401);
+    const agentDoc = agentsSnapshot.docs[0];
+    const agent = { id: agentDoc.id, ...agentDoc.data() } as any;
     if (agent.status !== 'active') return _error('Agent inativo', 403);
 
     const [, agentId, action] = agentMatch;
 
     if (action === 'heartbeat' && req.method === 'POST') {
       const body = await readBody(req);
-      await _query(`UPDATE agents SET last_heartbeat=(NOW() AT TIME ZONE 'UTC')::text, version=COALESCE($1,version), updated_at=(NOW() AT TIME ZONE 'UTC')::text WHERE id=$2`,[body.version||null,agentId]);
+      await _adminDb.collection('agents').doc(agentId).update({
+        lastHeartbeat: Timestamp.now(), version: body.version || agent.version, updatedAt: Timestamp.now()
+      });
       return _json({ success: true, message: 'Heartbeat registrado' });
     }
 
     if (action === 'config' && req.method === 'GET') {
-      return _json({ success: true, data: (await _query(`SELECT id, cliente, unidade, ip, comunidade_snmp, fabricante, modelo, numero_serie, localizacao FROM equipamentos WHERE agent_id=$1 AND status_monitoramento='ativo'`,[agentId])).rows });
+      const snapshot = await _adminDb.collection('equipamentos').where('agentId', '==', agentId).where('statusMonitoramento', '==', 'ativo').get();
+      return _json({ success: true, data: snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() })) });
     }
 
     if (action === 'collect' && req.method === 'POST') {
@@ -540,36 +666,63 @@ async function handleAgents(req: Request, path: string, params: Record<string, s
       let processed = 0, errors = 0;
       for (const equip of body.equipamentos) {
         try {
-          const eq = (await _query('SELECT id FROM equipamentos WHERE ip=$1 AND agent_id=$2',[equip.ip,agentId])).rows[0];
-          let eid: number;
-          if (eq) { eid = eq.id; } else {
-            const ne = await _query(`INSERT INTO equipamentos (cliente,ip,comunidade_snmp,fabricante,modelo,numero_serie,agent_id,status_monitoramento) VALUES ($1,$2,'public',$3,$4,$5,$6,'ativo') RETURNING id`,
-              [equip.cliente||'Agent Discovery',equip.ip,equip.fabricante||null,equip.modelo||null,equip.numero_serie||null,agentId]);
-            eid = ne.rows[0].id;
+          const eqSnapshot = await _adminDb.collection('equipamentos').where('ip', '==', equip.ip).where('agentId', '==', agentId).limit(1).get();
+          let eid: string;
+          if (!eqSnapshot.empty) {
+            eid = eqSnapshot.docs[0].id;
+          } else {
+            const neRef = await _adminDb.collection('equipamentos').add({
+              cliente: equip.cliente || 'Agent Discovery', ip: equip.ip, comunidadeSnmp: 'public',
+              fabricante: equip.fabricante || null, modelo: equip.modelo || null, numeroSerie: equip.numero_serie || null,
+              agentId, statusMonitoramento: 'ativo', createdAt: Timestamp.now(), updatedAt: Timestamp.now()
+            });
+            eid = neRef.id;
           }
-          await _query(`INSERT INTO leituras (equipamento_id,contador_total,contador_pb,contador_cor,toner_preto,toner_ciano,toner_magenta,toner_amarelo,status_online,mensagens_erro,numero_serie_equip,modelo_equip,nome_equip) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-            [eid,equip.contadores?.total||0,equip.contadores?.pb||0,equip.contadores?.cor||0,equip.toner?.preto||0,equip.toner?.ciano||0,equip.toner?.magenta||0,equip.toner?.amarelo||0,equip.status_online?1:0,equip.mensagens_erro||'',equip.numero_serie||'',equip.modelo||'',equip.nome||'']);
+          await _adminDb.collection('leituras').add({
+            equipamentoId: eid, dataLeitura: new Date().toISOString().split('T')[0],
+            contadorTotal: equip.contadores?.total || 0, contadorPb: equip.contadores?.pb || 0, contadorCor: equip.contadores?.cor || 0,
+            tonerPreto: equip.toner?.preto || 0, tonerCiano: equip.toner?.ciano || 0, tonerMagenta: equip.toner?.magenta || 0, tonerAmarelo: equip.toner?.amarelo || 0,
+            statusOnline: equip.status_online ? 1 : 0, mensagensErro: equip.mensagens_erro || '', numeroSerieEquip: equip.numero_serie || '',
+            modeloEquip: equip.modelo || '', nomeEquip: equip.nome || '', createdAt: Timestamp.now()
+          });
           const toners = [{t:'preto',p:equip.toner?.preto||0},{t:'ciano',p:equip.toner?.ciano||0},{t:'magenta',p:equip.toner?.magenta||0},{t:'amarelo',p:equip.toner?.amarelo||0}];
           for (const toner of toners) {
-            const ex = (await _query('SELECT id FROM suprimentos WHERE equipamento_id=$1 AND tipo=$2',[eid,toner.t])).rows[0];
-            if (ex) await _query(`UPDATE suprimentos SET percentual=$1, ultima_leitura=(NOW() AT TIME ZONE 'UTC')::text, updated_at=(NOW() AT TIME ZONE 'UTC')::text WHERE id=$2`,[toner.p,ex.id]);
-            else await _query('INSERT INTO suprimentos (equipamento_id,tipo,percentual) VALUES ($1,$2,$3)',[eid,toner.t,toner.p]);
+            const exSnapshot = await _adminDb.collection('suprimentos').where('equipamentoId', '==', eid).where('tipo', '==', toner.t).limit(1).get();
+            if (exSnapshot.docs[0]) {
+              await _adminDb.collection('suprimentos').doc(exSnapshot.docs[0].id).update({ percentual: toner.p, ultimaLeitura: new Date().toISOString(), updatedAt: Timestamp.now() });
+            } else {
+              await _adminDb.collection('suprimentos').add({ equipamentoId: eid, tipo: toner.t, percentual: toner.p, createdAt: Timestamp.now(), updatedAt: Timestamp.now() });
+            }
           }
           if (!equip.status_online) {
-            const exA = (await _query(`SELECT id FROM alertas WHERE equipamento_id=$1 AND tipo='offline' AND resolvido=0`,[eid])).rows[0];
-            if (!exA) await _query(`INSERT INTO alertas (equipamento_id,tipo,mensagem,nivel) VALUES ($1,'offline',$2,'critical')`,[eid,`Equipamento ${equip.nome||equip.ip} está offline`]);
+            const exAlert = await _adminDb.collection('alertas').where('equipamentoId', '==', eid).where('tipo', '==', 'offline').where('resolvido', '==', 0).limit(1).get();
+            if (exAlert.empty) {
+              await _adminDb.collection('alertas').add({ equipamentoId: eid, tipo: 'offline', mensagem: `Equipamento ${equip.nome||equip.ip} está offline`, nivel: 'critical', resolvido: 0, createdAt: Timestamp.now() });
+            }
           } else {
-            await _query(`UPDATE alertas SET resolvido=1, resolvido_em=(NOW() AT TIME ZONE 'UTC')::text WHERE equipamento_id=$1 AND tipo='offline' AND resolvido=0`,[eid]);
+            const offlineAlerts = await _adminDb.collection('alertas').where('equipamentoId', '==', eid).where('tipo', '==', 'offline').where('resolvido', '==', 0).get();
+            for (const alertDoc of offlineAlerts.docs) {
+              await _adminDb.collection('alertas').doc(alertDoc.id).update({ resolvido: 1, resolvidoEm: Timestamp.now() });
+            }
           }
           for (const toner of toners) {
             if (toner.p === 0) {
-              const ex = (await _query(`SELECT id FROM alertas WHERE equipamento_id=$1 AND tipo='toner_zerado' AND mensagem LIKE $2 AND resolvido=0`,[eid,`%${toner.t}%`])).rows[0];
-              if (!ex) await _query(`INSERT INTO alertas (equipamento_id,tipo,mensagem,nivel) VALUES ($1,'toner_zerado',$2,'critical')`,[eid,`Toner ${toner.t} zerado`]);
+              const exAlert = await _adminDb.collection('alertas').where('equipamentoId', '==', eid).where('tipo', '==', 'toner_zerado').where('resolvido', '==', 0).limit(1).get();
+              if (exAlert.empty) {
+                await _adminDb.collection('alertas').add({ equipamentoId: eid, tipo: 'toner_zerado', mensagem: `Toner ${toner.t} zerado`, nivel: 'critical', resolvido: 0, createdAt: Timestamp.now() });
+              }
             } else if (toner.p <= 15) {
-              const ex = (await _query(`SELECT id FROM alertas WHERE equipamento_id=$1 AND tipo='toner_baixo' AND mensagem LIKE $2 AND resolvido=0`,[eid,`%${toner.t}%`])).rows[0];
-              if (!ex) await _query(`INSERT INTO alertas (equipamento_id,tipo,mensagem,nivel) VALUES ($1,'toner_baixo',$2,'warning')`,[eid,`Toner ${toner.t} com ${toner.p}%`]);
+              const exAlert = await _adminDb.collection('alertas').where('equipamentoId', '==', eid).where('tipo', '==', 'toner_baixo').where('resolvido', '==', 0).limit(1).get();
+              if (exAlert.empty) {
+                await _adminDb.collection('alertas').add({ equipamentoId: eid, tipo: 'toner_baixo', mensagem: `Toner ${toner.t} com ${toner.p}%`, nivel: 'warning', resolvido: 0, createdAt: Timestamp.now() });
+              }
             } else {
-              await _query(`UPDATE alertas SET resolvido=1, resolvido_em=(NOW() AT TIME ZONE 'UTC')::text WHERE equipamento_id=$1 AND tipo IN ('toner_baixo','toner_zerado') AND mensagem LIKE $2 AND resolvido=0`,[eid,`%${toner.t}%`]);
+              const lowAlerts = await _adminDb.collection('alertas').where('equipamentoId', '==', eid).where('tipo', 'in', ['toner_baixo', 'toner_zerado']).where('resolvido', '==', 0).get();
+              for (const alertDoc of lowAlerts.docs) {
+                if (alertDoc.data().mensagem?.includes(toner.t)) {
+                  await _adminDb.collection('alertas').doc(alertDoc.id).update({ resolvido: 1, resolvidoEm: Timestamp.now() });
+                }
+              }
             }
           }
           processed++;
@@ -582,60 +735,92 @@ async function handleAgents(req: Request, path: string, params: Record<string, s
       const body = await readBody(req);
       if (!body.logs || !Array.isArray(body.logs)) return _error('Logs inválidos', 400);
       for (const log of body.logs) {
-        await _query(`INSERT INTO agent_logs (agent_id,level,message,details) VALUES ($1,$2,$3,$4)`,[agentId,log.level||'info',log.message,log.details?JSON.stringify(log.details):null]);
+        await _adminDb.collection('agentLogs').add({
+          agentId, level: log.level || 'info', message: log.message, details: log.details || null, createdAt: Timestamp.now()
+        });
       }
       return _json({ success: true, message: `${body.logs.length} logs recebidos` });
     }
   }
 
-  const adminAuth = await _requireAdmin(req);
+  const adminAuth = await requireAdmin(req);
   if (adminAuth.error) return adminAuth.error;
 
   if (path === '/agents' && req.method === 'GET') {
-    return _json({ success: true, data: (await _query(`SELECT a.*, (SELECT COUNT(*) FROM equipamentos e WHERE e.agent_id=a.id) as printers_count, (SELECT COUNT(*) FROM agent_logs al WHERE al.agent_id=a.id AND al.level='error' AND al.created_at > (NOW() AT TIME ZONE 'UTC')::text - interval '24 hours') as errors_24h FROM agents a ORDER BY a.created_at DESC`)).rows });
+    const snapshot = await _adminDb.collection('agents').orderBy('createdAt', 'desc').get();
+    const agents = [];
+    for (const doc of snapshot.docs) {
+      const agent = { id: doc.id, ...doc.data() } as any;
+      const equipSnapshot = await _adminDb.collection('equipamentos').where('agentId', '==', agent.id).count().get();
+      agent.printers_count = equipSnapshot.data().count;
+      const twentyFourHoursAgo = new Date(Date.now() - 24*60*60*1000);
+      const logsSnapshot = await _adminDb.collection('agentLogs').where('agentId', '==', agent.id).where('level', '==', 'error').where('createdAt', '>', twentyFourHoursAgo).count().get();
+      agent.errors_24h = logsSnapshot.data().count;
+      agents.push(agent);
+    }
+    return _json({ success: true, data: agents });
   }
 
-  if (path.match(/^\/agents\/\d+$/) && req.method === 'GET') {
-    const id = getSegment(path, 1);
-    const agent = (await _query(`SELECT a.*, (SELECT COUNT(*) FROM equipamentos e WHERE e.agent_id=a.id) as printers_count FROM agents a WHERE a.id=$1`,[id])).rows[0];
-    if (!agent) return _error('Agent não encontrado', 404);
-    return _json({ success: true, data: { ...agent, equipamentos: (await _query('SELECT id, cliente, ip, modelo, numero_serie, status_monitoramento FROM equipamentos WHERE agent_id=$1',[id])).rows, logs: (await _query('SELECT * FROM agent_logs WHERE agent_id=$1 ORDER BY created_at DESC LIMIT 50',[id])).rows } });
+  if (path.match(/^\/agents\/[^\/]+$/) && req.method === 'GET') {
+    const id = getSegment(path, 1)!;
+    const doc = await _adminDb.collection('agents').doc(id).get();
+    if (!doc.exists) return _error('Agent não encontrado', 404);
+    const agent = { id: doc.id, ...doc.data() } as any;
+    const equipSnapshot = await _adminDb.collection('equipamentos').where('agentId', '==', id).get();
+    agent.equipamentos = equipSnapshot.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+    const logsSnapshot = await _adminDb.collection('agentLogs').where('agentId', '==', id).orderBy('createdAt', 'desc').limit(50).get();
+    agent.logs = logsSnapshot.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+    return _json({ success: true, data: agent });
   }
 
-  if (path.match(/^\/agents\/\d+$/) && req.method === 'PUT') {
-    const id = getSegment(path, 1);
+  if (path.match(/^\/agents\/[^\/]+$/) && req.method === 'PUT') {
+    const id = getSegment(path, 1)!;
     const body = await readBody(req);
-    const existing = (await _query('SELECT * FROM agents WHERE id=$1',[id])).rows[0];
-    if (!existing) return _error('Agent não encontrado', 404);
-    const result = await _query(`UPDATE agents SET name=$1, company_id=$2, location=$3, status=$4, config=$5, updated_at=(NOW() AT TIME ZONE 'UTC')::text WHERE id=$6 RETURNING *`,
-      [body.name||existing.name, body.company_id||existing.company_id, body.location!==undefined?body.location:existing.location, body.status||existing.status, body.config?JSON.stringify(body.config):existing.config, id]);
-    return _json({ success: true, data: result.rows[0], message: 'Agent atualizado' });
+    const doc = await _adminDb.collection('agents').doc(id).get();
+    if (!doc.exists) return _error('Agent não encontrado', 404);
+    const updateData: any = { updatedAt: Timestamp.now() };
+    if (body.name !== undefined) updateData.name = body.name;
+    if (body.company_id !== undefined) updateData.companyId = body.company_id;
+    if (body.location !== undefined) updateData.location = body.location;
+    if (body.status !== undefined) updateData.status = body.status;
+    if (body.config !== undefined) updateData.config = body.config;
+    await _adminDb.collection('agents').doc(id).update(updateData);
+    const updated = await _adminDb.collection('agents').doc(id).get();
+    return _json({ success: true, data: { id: updated.id, ...updated.data() }, message: 'Agent atualizado' });
   }
 
-  if (path.match(/^\/agents\/\d+$/) && req.method === 'DELETE') {
-    const id = getSegment(path, 1);
-    const existing = (await _query('SELECT * FROM agents WHERE id=$1',[id])).rows[0];
-    if (!existing) return _error('Agent não encontrado', 404);
-    await _query('UPDATE equipamentos SET agent_id=NULL WHERE agent_id=$1',[id]);
-    await _query('DELETE FROM agents WHERE id=$1',[id]);
+  if (path.match(/^\/agents\/[^\/]+$/) && req.method === 'DELETE') {
+    const id = getSegment(path, 1)!;
+    const doc = await _adminDb.collection('agents').doc(id).get();
+    if (!doc.exists) return _error('Agent não encontrado', 404);
+    const equipSnapshot = await _adminDb.collection('equipamentos').where('agentId', '==', id).get();
+    for (const equipDoc of equipSnapshot.docs) {
+      await _adminDb.collection('equipamentos').doc(equipDoc.id).update({ agentId: null });
+    }
+    await _adminDb.collection('agents').doc(id).delete();
     return _json({ success: true, message: 'Agent excluído com sucesso' });
   }
 
-  if (path.match(/^\/agents\/\d+\/assign$/) && req.method === 'POST') {
-    const id = getSegment(path, 1);
+  if (path.match(/^\/agents\/[^\/]+\/assign$/) && req.method === 'POST') {
+    const id = getSegment(path, 1)!;
     const body = await readBody(req);
     if (!body.equipamento_id) return _error('equipamento_id é obrigatório', 400);
-    if (!(await _query('SELECT id FROM agents WHERE id=$1',[id])).rows[0]) return _error('Agent não encontrado', 404);
-    if (!(await _query('SELECT id FROM equipamentos WHERE id=$1',[body.equipamento_id])).rows[0]) return _error('Equipamento não encontrado', 404);
-    await _query('UPDATE equipamentos SET agent_id=$1 WHERE id=$2',[id,body.equipamento_id]);
+    const agentDoc = await _adminDb.collection('agents').doc(id).get();
+    if (!agentDoc.exists) return _error('Agent não encontrado', 404);
+    const equipDoc = await _adminDb.collection('equipamentos').doc(body.equipamento_id).get();
+    if (!equipDoc.exists) return _error('Equipamento não encontrado', 404);
+    await _adminDb.collection('equipamentos').doc(body.equipamento_id).update({ agentId: id });
     return _json({ success: true, message: 'Equipamento atribuído ao agent' });
   }
 
-  if (path.match(/^\/agents\/\d+\/unassign$/) && req.method === 'POST') {
-    const id = getSegment(path, 1);
+  if (path.match(/^\/agents\/[^\/]+\/unassign$/) && req.method === 'POST') {
+    const id = getSegment(path, 1)!;
     const body = await readBody(req);
     if (!body.equipamento_id) return _error('equipamento_id é obrigatório', 400);
-    await _query('UPDATE equipamentos SET agent_id=NULL WHERE id=$1 AND agent_id=$2',[body.equipamento_id,id]);
+    const equipDoc = await _adminDb.collection('equipamentos').doc(body.equipamento_id).get();
+    if (equipDoc.exists && equipDoc.data()?.agentId === id) {
+      await _adminDb.collection('equipamentos').doc(body.equipamento_id).update({ agentId: null });
+    }
     return _json({ success: true, message: 'Equipamento removido do agent' });
   }
 
@@ -644,67 +829,93 @@ async function handleAgents(req: Request, path: string, params: Record<string, s
 
 // ======================== AUDITORIA ========================
 async function handleAuditoria(req: Request, path: string, params: Record<string, string>) {
-  const auth = await _requireAuth(req);
+  const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
   if (path === '/auditoria/stats' && req.method === 'GET') {
     const { data_inicio, data_fim } = params;
-    let df = ''; const p: any[] = [];
-    if (data_inicio) { df += ` AND data_impressao>=${p.length+1}`; p.push(data_inicio); }
-    if (data_fim) { df += ` AND data_impressao<=${p.length+1}`; p.push(data_fim); }
-    const [total, porUsuario, porEquipamento, porCliente, porMes, porFonte, porCor, porStatus] = await Promise.all([
-      _query(`SELECT COUNT(*) as total, COALESCE(SUM(total_paginas),0) as total_paginas FROM auditoria_impressoes WHERE 1=1${df}`,p),
-      _query(`SELECT usuario, COUNT(*) as total_impressoes, SUM(total_paginas) as total_paginas FROM auditoria_impressoes WHERE usuario IS NOT NULL AND usuario != ''${df} GROUP BY usuario ORDER BY total_paginas DESC LIMIT 10`,p),
-      _query(`SELECT a.equipamento_id, e.modelo, e.ip, COUNT(*) as total_impressoes, SUM(a.total_paginas) as total_paginas FROM auditoria_impressoes a LEFT JOIN equipamentos e ON a.equipamento_id=e.id${df?` WHERE 1=1${df}`:''} GROUP BY a.equipamento_id, e.modelo, e.ip ORDER BY total_paginas DESC LIMIT 10`,p),
-      _query(`SELECT cliente, COUNT(*) as total_impressoes, SUM(total_paginas) as total_paginas FROM auditoria_impressoes WHERE cliente IS NOT NULL AND cliente != ''${df} GROUP BY cliente ORDER BY total_paginas DESC LIMIT 10`,p),
-      _query(`SELECT SUBSTR(data_impressao,1,7) as mes, COUNT(*) as total_impressoes, SUM(total_paginas) as total_paginas FROM auditoria_impressoes WHERE 1=1${df} GROUP BY mes ORDER BY mes DESC LIMIT 12`,p),
-      _query(`SELECT fonte, COUNT(*) as total FROM auditoria_impressoes WHERE 1=1${df} GROUP BY fonte`,p),
-      _query(`SELECT CASE WHEN colorida=1 THEN 'Colorida' ELSE 'P&B' END as tipo, COUNT(*) as total, SUM(total_paginas) as paginas FROM auditoria_impressoes WHERE 1=1${df} GROUP BY colorida`,p),
-      _query(`SELECT status_impressao, COUNT(*) as total FROM auditoria_impressoes WHERE 1=1${df} GROUP BY status_impressao`,p),
-    ]);
-    return _json({ success: true, data: { total_registros: parseInt(total.rows[0].total), total_paginas: parseInt(total.rows[0].total_paginas), por_usuario: porUsuario.rows, por_equipamento: porEquipamento.rows, por_cliente: porCliente.rows, por_mes: porMes.rows, por_fonte: porFonte.rows, por_cor: porCor.rows, por_status: porStatus.rows } });
+    let query: FirebaseFirestore.Query = _adminDb.collection('auditoriaImpressoes');
+    if (data_inicio) query = query.where('dataImpressao', '>=', data_inicio);
+    if (data_fim) query = query.where('dataImpressao', '<=', data_fim);
+    const snapshot = await query.get();
+    const records = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+
+    const total_registros = records.length;
+    const total_paginas = records.reduce((sum: number, r: any) => sum + (r.totalPaginas || 0), 0);
+
+    const porUsuario = records.reduce((acc: any, r: any) => {
+      if (r.usuario) { acc[r.usuario] = (acc[r.usuario] || 0) + 1; } return acc;
+    }, {});
+    const porEquipamento = records.reduce((acc: any, r: any) => {
+      if (r.equipamentoId) { acc[r.equipamentoId] = (acc[r.equipamentoId] || 0) + 1; } return acc;
+    }, {});
+    const porCliente = records.reduce((acc: any, r: any) => {
+      if (r.cliente) { acc[r.cliente] = (acc[r.cliente] || 0) + 1; } return acc;
+    }, {});
+
+    return _json({ success: true, data: {
+      total_registros, total_paginas,
+      por_usuario: Object.entries(porUsuario).map(([usuario, total_impressoes]) => ({ usuario, total_impressoes, total_paginas: records.filter((r: any) => r.usuario === usuario).reduce((s: number, r: any) => s + (r.totalPaginas || 0), 0) })),
+      por_equipamento: Object.entries(porEquipamento).map(([equipamentoId, total_impressoes]) => ({ equipamentoId, total_impressoes })),
+      por_cliente: Object.entries(porCliente).map(([cliente, total_impressoes]) => ({ cliente, total_impressoes })),
+      por_mes: [], por_fonte: [], por_cor: [], por_status: []
+    } });
   }
 
   if (path === '/auditoria/export/csv' && req.method === 'GET') {
     const { cliente, equipamento_id, usuario, data_inicio, data_fim } = params;
-    let q = `SELECT a.usuario, a.computador, a.documento, a.data_impressao, a.hora_impressao, e.modelo as equipamento, a.cliente, a.total_paginas, a.colorida, a.duplex, a.tamanho_papel, a.status_impressao, a.fonte FROM auditoria_impressoes a LEFT JOIN equipamentos e ON a.equipamento_id=e.id WHERE 1=1`;
-    const p: any[] = []; let i = 1;
-    if (cliente) { q += ` AND a.cliente=$${i}`; p.push(cliente); i++; }
-    if (equipamento_id) { q += ` AND a.equipamento_id=$${i}`; p.push(equipamento_id); i++; }
-    if (usuario) { q += ` AND a.usuario ILIKE $${i}`; p.push(`%${usuario}%`); i++; }
-    if (data_inicio) { q += ` AND a.data_impressao>=$${i}`; p.push(data_inicio); i++; }
-    if (data_fim) { q += ` AND a.data_impressao<=$${i}`; p.push(data_fim); i++; }
-    const rows = (await _query(q + ' ORDER BY a.data_impressao DESC', p)).rows;
-    if (!rows.length) return _error('Nenhum dado encontrado', 404);
+    let query: FirebaseFirestore.Query = _adminDb.collection('auditoriaImpressoes');
+    if (data_inicio) query = query.where('dataImpressao', '>=', data_inicio);
+    if (data_fim) query = query.where('dataImpressao', '<=', data_fim);
+    const snapshot = await query.get();
+    let records = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+
+    if (cliente) records = records.filter((r: any) => r.cliente === cliente);
+    if (equipamento_id) records = records.filter((r: any) => r.equipamentoId === equipamento_id);
+    if (usuario) records = records.filter((r: any) => r.usuario?.toLowerCase().includes(usuario.toLowerCase()));
+
+    if (!records.length) return _error('Nenhum dado encontrado', 404);
     const headers = ['Usuário','Computador','Documento','Data','Hora','Equipamento','Cliente','Páginas','Colorida','Duplex','Papel','Status','Fonte'];
-    const csvRows = ['\uFEFF'+headers.join(';'), ...rows.map((r: any) => [r.usuario||'',r.computador||'',r.documento||'',r.data_impressao||'',r.hora_impressao||'',r.equipamento||'',r.cliente||'',r.total_paginas||0,r.colorida?'Sim':'Não',r.duplex?'Sim':'Não',r.tamanho_papel||'A4',r.status_impressao||'',r.fonte||''].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(';'))];
+    const csvRows = ['\uFEFF'+headers.join(';'), ...records.map((r: any) => [r.usuario||'',r.computador||'',r.documento||'',r.dataImpressao||'',r.horaImpressao||'',r.modeloEquip||'',r.cliente||'',r.totalPaginas||0,r.colorida?'Sim':'Não',r.duplex?'Sim':'Não',r.tamanhoPapel||'A4',r.statusImpressao||'',r.fonte||''].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(';'))];
     return new Response(Buffer.from(csvRows.join('\n'),'utf-8'), { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename=auditoria_impressoes.csv' } });
   }
 
   if (path === '/auditoria' && req.method === 'GET') {
     const { cliente, equipamento_id, usuario, documento, data_inicio, data_fim, fonte, page = '1', per_page = '50' } = params;
-    let q = `SELECT a.*, e.ip as ip_equipamento_sql, e.modelo as modelo_sql, e.numero_serie as numero_serie_sql FROM auditoria_impressoes a LEFT JOIN equipamentos e ON a.equipamento_id=e.id WHERE 1=1`;
-    let cq = `SELECT COUNT(*) FROM auditoria_impressoes a LEFT JOIN equipamentos e ON a.equipamento_id=e.id WHERE 1=1`;
-    const p: any[] = [], cp: any[] = []; let pi = 1, ci = 1;
-    if (cliente) { q += ` AND a.cliente=$${pi}`; cq += ` AND a.cliente=$${ci}`; p.push(cliente); cp.push(cliente); pi++; ci++; }
-    if (equipamento_id) { q += ` AND a.equipamento_id=$${pi}`; cq += ` AND a.equipamento_id=$${ci}`; p.push(equipamento_id); cp.push(equipamento_id); pi++; ci++; }
-    if (usuario) { q += ` AND a.usuario ILIKE $${pi}`; cq += ` AND a.usuario ILIKE $${ci}`; p.push(`%${usuario}%`); cp.push(`%${usuario}%`); pi++; ci++; }
-    if (documento) { q += ` AND a.documento ILIKE $${pi}`; cq += ` AND a.documento ILIKE $${ci}`; p.push(`%${documento}%`); cp.push(`%${documento}%`); pi++; ci++; }
-    if (data_inicio) { q += ` AND a.data_impressao>=$${pi}`; cq += ` AND a.data_impressao>=$${ci}`; p.push(data_inicio); cp.push(data_inicio); pi++; ci++; }
-    if (data_fim) { q += ` AND a.data_impressao<=$${pi}`; cq += ` AND a.data_impressao<=$${ci}`; p.push(data_fim); cp.push(data_fim); pi++; ci++; }
-    if (fonte) { q += ` AND a.fonte=$${pi}`; cq += ` AND a.fonte=$${ci}`; p.push(fonte); cp.push(fonte); pi++; ci++; }
-    const total = parseInt((await _query(cq, cp)).rows[0].count);
-    const offset = (parseInt(page)-1)*parseInt(per_page);
-    q += ` ORDER BY a.data_impressao DESC, a.hora_impressao DESC LIMIT $${pi} OFFSET $${pi+1}`; p.push(parseInt(per_page), offset);
-    return _json({ success: true, data: (await _query(q, p)).rows, total, page: parseInt(page), per_page: parseInt(per_page) });
+    let query: FirebaseFirestore.Query = _adminDb.collection('auditoriaImpressoes');
+    if (cliente) query = query.where('cliente', '==', cliente);
+    if (equipamento_id) query = query.where('equipamentoId', '==', equipamento_id);
+    if (fonte) query = query.where('fonte', '==', fonte);
+    query = query.orderBy('dataImpressao', 'desc');
+
+    const snapshot = await query.get();
+    let records = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+
+    if (usuario) records = records.filter((r: any) => r.usuario?.toLowerCase().includes(usuario.toLowerCase()));
+    if (documento) records = records.filter((r: any) => r.documento?.toLowerCase().includes(documento.toLowerCase()));
+    if (data_inicio) records = records.filter((r: any) => r.dataImpressao >= data_inicio);
+    if (data_fim) records = records.filter((r: any) => r.dataImpressao <= data_fim);
+
+    const total = records.length;
+    const offset = (Number(page) - 1) * Number(per_page);
+    const data = records.slice(offset, offset + Number(per_page));
+
+    return _json({ success: true, data, total, page: Number(page), per_page: Number(per_page) });
   }
 
   if (path === '/auditoria' && req.method === 'POST') {
     const body = await readBody(req);
     const { equipamento_id, cliente, usuario, computador, documento, data_impressao, hora_impressao, total_paginas, colorida, duplex, tamanho_papel, status_impressao, fonte, dados_extras } = body;
-    const result = await _query(`INSERT INTO auditoria_impressoes (equipamento_id,cliente,usuario,computador,documento,data_impressao,hora_impressao,total_paginas,colorida,duplex,tamanho_papel,status_impressao,fonte,dados_extras) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
-      [equipamento_id||null,cliente||null,usuario||null,computador||null,documento||null,data_impressao||new Date().toISOString().split('T')[0],hora_impressao||new Date().toTimeString().slice(0,8),total_paginas||1,colorida?1:0,duplex?1:0,tamanho_papel||'A4',status_impressao||'concluida',fonte||'manual',dados_extras?JSON.stringify(dados_extras):'{}']);
-    return _json({ success: true, data: result.rows[0] }, 201);
+    const docRef = await _adminDb.collection('auditoriaImpressoes').add({
+      equipamentoId: equipamento_id || null, cliente: cliente || null, usuario: usuario || null, computador: computador || null,
+      documento: documento || null, dataImpressao: data_impressao || new Date().toISOString().split('T')[0],
+      horaImpressao: hora_impressao || new Date().toTimeString().slice(0,8), totalPaginas: total_paginas || 1,
+      colorida: colorida ? 1 : 0, duplex: duplex ? 1 : 0, tamanhoPapel: tamanho_papel || 'A4',
+      statusImpressao: status_impressao || 'concluida', fonte: fonte || 'manual',
+      dadosExtras: dados_extras || {}, createdAt: Timestamp.now()
+    });
+    const doc = await docRef.get();
+    return _json({ success: true, data: { id: doc.id, ...doc.data() } }, 201);
   }
 
   if (path === '/auditoria/batch' && req.method === 'POST') {
@@ -713,32 +924,47 @@ async function handleAuditoria(req: Request, path: string, params: Record<string
     let inserted = 0;
     for (const rec of body.records) {
       try {
-        await _query(`INSERT INTO auditoria_impressoes (equipamento_id,cliente,usuario,computador,documento,data_impressao,hora_impressao,total_paginas,colorida,duplex,tamanho_papel,status_impressao,fonte,ip_equipamento,numero_serie,modelo_equip,dados_extras) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
-          [rec.equipamento_id||null,rec.cliente||null,rec.usuario||null,rec.computador||null,rec.documento||null,rec.data_impressao||new Date().toISOString().split('T')[0],rec.hora_impressao||new Date().toTimeString().slice(0,8),rec.total_paginas||1,rec.colorida?1:0,rec.duplex?1:0,rec.tamanho_papel||'A4',rec.status_impressao||'concluida',rec.fonte||'spooler',rec.ip_equipamento||null,rec.numero_serie||null,rec.modelo_equip||null,rec.dados_extras?JSON.stringify(rec.dados_extras):'{}']);
+        await _adminDb.collection('auditoriaImpressoes').add({
+          equipamentoId: rec.equipamento_id || null, cliente: rec.cliente || null, usuario: rec.usuario || null,
+          computador: rec.computador || null, documento: rec.documento || null,
+          dataImpressao: rec.data_impressao || new Date().toISOString().split('T')[0],
+          horaImpressao: rec.hora_impressao || new Date().toTimeString().slice(0,8), totalPaginas: rec.total_paginas || 1,
+          colorida: rec.colorida ? 1 : 0, duplex: rec.duplex ? 1 : 0, tamanhoPapel: rec.tamanho_papel || 'A4',
+          statusImpressao: rec.status_impressao || 'concluida', fonte: rec.fonte || 'spooler',
+          ipEquipamento: rec.ip_equipamento || null, numeroSerie: rec.numero_serie || null, modeloEquip: rec.modelo_equip || null,
+          dadosExtras: rec.dados_extras || {}, createdAt: Timestamp.now()
+        });
         inserted++;
       } catch (e) { console.error('Error inserting audit record:', e); }
     }
     return _json({ success: true, data: { inserted, total: body.records.length } });
   }
 
-  if (path.match(/^\/auditoria\/\d+$/) && req.method === 'DELETE') {
-    await _query('DELETE FROM auditoria_impressoes WHERE id=$1',[getSegment(path,1)]);
+  if (path.match(/^\/auditoria\/[^\/]+$/) && req.method === 'DELETE') {
+    const id = getSegment(path, 1)!;
+    await _adminDb.collection('auditoriaImpressoes').doc(id).delete();
     return _json({ success: true, message: 'Registro excluído' });
   }
 
   if (path === '/auditoria/config' && req.method === 'GET') {
-    return _json({ success: true, data: (await _query(`SELECT c.*, e.modelo, e.ip FROM auditoria_config c LEFT JOIN equipamentos e ON c.equipamento_id=e.id ORDER BY c.created_at DESC`)).rows });
+    const snapshot = await _adminDb.collection('auditoriaConfig').orderBy('createdAt', 'desc').get();
+    return _json({ success: true, data: snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() })) });
   }
 
   if (path === '/auditoria/config' && req.method === 'POST') {
     const body = await readBody(req);
-    const result = await _query(`INSERT INTO auditoria_config (tipo_integracao,equipamento_id,config,ativo) VALUES ($1,$2,$3,$4) RETURNING *`,
-      [body.tipo_integracao, body.equipamento_id||null, JSON.stringify(body.config||{}), body.ativo!==undefined?(body.ativo?1:0):1]);
-    return _json({ success: true, data: result.rows[0] }, 201);
+    const docRef = await _adminDb.collection('auditoriaConfig').add({
+      tipoIntegracao: body.tipo_integracao, equipamentoId: body.equipamento_id || null,
+      config: body.config || {}, ativo: body.ativo !== undefined ? (body.ativo ? 1 : 0) : 1,
+      createdAt: Timestamp.now(), updatedAt: Timestamp.now()
+    });
+    const doc = await docRef.get();
+    return _json({ success: true, data: { id: doc.id, ...doc.data() } }, 201);
   }
 
-  if (path.match(/^\/auditoria\/config\/\d+$/) && req.method === 'DELETE') {
-    await _query('DELETE FROM auditoria_config WHERE id=$1',[getSegment(path,2)]);
+  if (path.match(/^\/auditoria\/config\/[^\/]+$/) && req.method === 'DELETE') {
+    const id = getSegment(path, 2)!;
+    await _adminDb.collection('auditoriaConfig').doc(id).delete();
     return _json({ success: true, message: 'Configuração excluída' });
   }
 
