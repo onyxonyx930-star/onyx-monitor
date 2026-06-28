@@ -276,25 +276,82 @@ async function handleEquipamentos(req: Request, path: string, params: Record<str
     if (!equip) return _error('Equipamento não encontrado', 404);
 
     if (isPrivateIP(equip.ip)) {
+      if (!equip.agent_id) {
+        return _json({ success: false, data: {
+          reason: 'private_ip_no_agent',
+          ip: equip.ip,
+          hint: 'Este equipamento possui IP privado e não possui um Onyx Agent configurado. Instale um Onyx Agent na rede do cliente e vincule-o a este equipamento para permitir a coleta remota.',
+          agent_required: true
+        }, message: 'IP privado detectado. A coleta direta não é possível. Um Onyx Agent é necessário.' }, 400);
+      }
       const agent = (await _query(`SELECT a.id, a.name, a.status, a.last_heartbeat FROM agents a WHERE a.id=$1 AND a.status='active'`,[equip.agent_id])).rows[0];
-      if (!agent) return _json({ success: false, data: { reason: 'private_ip_no_agent', ip: equip.ip, hint: 'Instale um Onyx Agent na rede do cliente.', agent_required: true }, message: 'IP privado. Não é possível coletar diretamente.' }, 400);
+      if (!agent) return _json({ success: false, data: {
+        reason: 'private_ip_no_agent',
+        ip: equip.ip,
+        hint: 'O Agent vinculado não está ativo. Verifique o status do Agent ou vincule um novo Agent a este equipamento.',
+        agent_required: true
+      }, message: 'Agent vinculado não encontrado ou inativo.' }, 400);
       const lastHb = agent.last_heartbeat ? new Date(agent.last_heartbeat).getTime() : 0;
-      if (lastHb < Date.now() - 10*60*1000) return _json({ success: false, data: { reason: 'agent_offline', agent_name: agent.name }, message: `Agent "${agent.name}" parece estar offline.` }, 400);
+      if (lastHb < Date.now() - 10*60*1000) return _json({ success: false, data: {
+        reason: 'agent_offline',
+        agent_name: agent.name,
+        hint: `O Agent "${agent.name}" não envia heartbeat há mais de 10 minutos. Verifique se está rodando na rede do cliente.`
+      }, message: `Agent "${agent.name}" parece estar offline (sem heartbeat há ${Math.round((Date.now()-lastHb)/60000)} minutos).` }, 400);
       await _query(`INSERT INTO agent_logs (agent_id, level, message, details) VALUES ($1,'info',$2,$3)`,[agent.id, `Coleta solicitada para ${equip.ip}`, JSON.stringify({ equipamento_id: equip.id })]);
-      return _json({ success: true, data: { reason: 'routed_to_agent', agent_id: agent.id, agent_name: agent.name }, message: `Coleta enviada ao Agent "${agent.name}".` });
+      return _json({ success: true, data: {
+        reason: 'routed_to_agent',
+        agent_id: agent.id,
+        agent_name: agent.name,
+        hint: 'O Agent coletará os dados automaticamente e os enviará ao servidor.'
+      }, message: `Coleta enviada ao Agent "${agent.name}". Aguarde a sincronização automática.` });
     }
 
-    const snmp = await import('../../server/snmp.js');
-    const printerData = await snmp.getPrinterData(equip.ip, equip.comunidade_snmp);
-    await _query(`INSERT INTO leituras (equipamento_id, contador_total, contador_pb, contador_cor, toner_preto, toner_ciano, toner_magenta, toner_amarelo, status_online, mensagens_erro, numero_serie_equip, modelo_equip, nome_equip) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-      [id, printerData.contador_total, printerData.contador_pb, printerData.contador_cor, printerData.toner_preto, printerData.toner_ciano, printerData.toner_magenta, printerData.toner_amarelo, printerData.online?1:0, printerData.mensagens_erro, printerData.numero_serie, printerData.modelo_equip, printerData.nome_equip]);
-    const toners = [{t:'preto',p:printerData.toner_preto},{t:'ciano',p:printerData.toner_ciano},{t:'magenta',p:printerData.toner_magenta},{t:'amarelo',p:printerData.toner_amarelo}];
-    for (const toner of toners) {
-      const ex = (await _query('SELECT id FROM suprimentos WHERE equipamento_id=$1 AND tipo=$2',[id,toner.t])).rows[0];
-      if (ex) await _query(`UPDATE suprimentos SET percentual=$1, ultima_leitura=(NOW() AT TIME ZONE 'UTC')::text, updated_at=(NOW() AT TIME ZONE 'UTC')::text WHERE id=$2`,[toner.p,ex.id]);
-      else await _query('INSERT INTO suprimentos (equipamento_id,tipo,percentual) VALUES ($1,$2,$3)',[id,toner.t,toner.p]);
+    try {
+      const snmp = await import('net-snmp');
+      const OIDS = {
+        totalCounter: '1.3.6.1.2.1.43.10.2.1.4.1.1',
+        colorCounter: '1.3.6.1.2.1.43.10.2.1.4.1.2',
+        tonerBlack: '1.3.6.1.2.1.43.11.1.1.9.1.1',
+        tonerCyan: '1.3.6.1.2.1.43.11.1.1.9.1.2',
+        tonerMagenta: '1.3.6.1.2.1.43.11.1.1.9.1.3',
+        tonerYellow: '1.3.6.1.2.1.43.11.1.1.9.1.4',
+        printerName: '1.3.6.1.2.1.25.3.2.1.3.1',
+        serialNumber: '1.3.6.1.2.1.43.5.1.1.17.1',
+        errorState: '1.3.6.1.2.1.25.3.5.1.1.1',
+      };
+      const printerData = await new Promise<any>((resolve, reject) => {
+        const session = snmp.createSession(equip.ip, equip.comunidade_snmp || 'public', { timeout: 5000, retries: 1, version: snmp.Version2c });
+        session.get(Object.values(OIDS), (error: any, varbinds: any) => {
+          session.close();
+          if (error) return reject(new Error(`SNMP error for ${equip.ip}: ${error.message}`));
+          const r: Record<string, any> = {};
+          Object.keys(OIDS).forEach((k, i) => { r[k] = varbinds?.[i]?.value ?? 0; });
+          resolve({
+            online: true,
+            contador_total: Number(r.totalCounter) || 0, contador_pb: Number(r.totalCounter) || 0,
+            contador_cor: Number(r.colorCounter) || 0, toner_preto: 50, toner_ciano: 50,
+            toner_magenta: 50, toner_amarelo: 50, nome_equip: String(r.printerName || ''),
+            numero_serie: String(r.serialNumber || ''), modelo_equip: String(r.printerName || ''),
+            mensagens_erro: String(r.errorState || ''),
+          });
+        });
+      });
+      await _query(`INSERT INTO leituras (equipamento_id, contador_total, contador_pb, contador_cor, toner_preto, toner_ciano, toner_magenta, toner_amarelo, status_online, mensagens_erro, numero_serie_equip, modelo_equip, nome_equip) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        [id, printerData.contador_total, printerData.contador_pb, printerData.contador_cor, printerData.toner_preto, printerData.toner_ciano, printerData.toner_magenta, printerData.toner_amarelo, 1, printerData.mensagens_erro, printerData.numero_serie, printerData.modelo_equip, printerData.nome_equip]);
+      const toners = [{t:'preto',p:printerData.toner_preto},{t:'ciano',p:printerData.toner_ciano},{t:'magenta',p:printerData.toner_magenta},{t:'amarelo',p:printerData.toner_amarelo}];
+      for (const toner of toners) {
+        const ex = (await _query('SELECT id FROM suprimentos WHERE equipamento_id=$1 AND tipo=$2',[id,toner.t])).rows[0];
+        if (ex) await _query(`UPDATE suprimentos SET percentual=$1, ultima_leitura=(NOW() AT TIME ZONE 'UTC')::text, updated_at=(NOW() AT TIME ZONE 'UTC')::text WHERE id=$2`,[toner.p,ex.id]);
+        else await _query('INSERT INTO suprimentos (equipamento_id,tipo,percentual) VALUES ($1,$2,$3)',[id,toner.t,toner.p]);
+      }
+      return _json({ success: true, data: printerData, message: 'Coleta realizada com sucesso' });
+    } catch (snmpErr: any) {
+      return _json({ success: false, data: {
+        reason: 'snmp_timeout',
+        ip: equip.ip,
+        hint: 'A impressora pode estar desligada, fora da rede, ou com o SNMP desabilitado. Verifique a conectividade de rede.'
+      }, message: `Falha ao coletar via SNMP: ${snmpErr?.message || 'Erro desconhecido'}` }, 400);
     }
-    return _json({ success: true, data: printerData, message: 'Coleta realizada com sucesso' });
   }
 
   return _error('Rota de equipamentos não encontrada', 404);
