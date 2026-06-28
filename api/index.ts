@@ -74,13 +74,24 @@ function isPrivateIP(ip: string): boolean {
 }
 
 async function requireAuth(req: Request): Promise<{ user: any; error?: Response }> {
+  const route = req.url;
   const h = req.headers.get('authorization');
-  if (!h || !h.startsWith('Bearer ')) return { user: null, error: _json({ success: false, message: 'Token não fornecido' }, 401) };
+  const hasToken = !!h && h.startsWith('Bearer ');
+  console.log(`[AUTH] Route: ${route} | Token received: ${hasToken}`);
+
+  if (!hasToken) {
+    console.log('[AUTH] FAIL: No Bearer token in Authorization header');
+    return { user: null, error: _json({ success: false, message: 'Usuário não autenticado ou sem permissão para acessar equipamentos.' }, 401) };
+  }
+
   try {
-    const token = h.split(' ')[1];
+    const token = h!.split(' ')[1];
     const decoded = await _adminAuth.verifyIdToken(token);
+    console.log(`[AUTH] Token verified | UID: ${decoded.uid} | Email: ${decoded.email}`);
+
     let userDoc = await _adminDb.collection('usuarios').doc(decoded.uid).get();
     if (!userDoc.exists) {
+      console.log(`[AUTH] User doc not found in Firestore for UID: ${decoded.uid} — creating...`);
       const userRecord = await _adminAuth.getUser(decoded.uid);
       const isAdminEmail = userRecord.email === 'admin@onyx.com';
       await _adminDb.collection('usuarios').doc(decoded.uid).set({
@@ -93,16 +104,26 @@ async function requireAuth(req: Request): Promise<{ user: any; error?: Response 
       });
       userDoc = await _adminDb.collection('usuarios').doc(decoded.uid).get();
     }
+
     const userData = userDoc.data();
+    console.log(`[AUTH] User found | UID: ${decoded.uid} | Role: ${userData?.role} | Ativo: ${userData?.ativo}`);
+
     if (userData?.email === 'admin@onyx.com' && userData?.role !== 'admin') {
+      console.log(`[AUTH] Promoting ${decoded.uid} to admin`);
       await _adminDb.collection('usuarios').doc(decoded.uid).update({ role: 'admin', updatedAt: Timestamp.now() });
       userDoc = await _adminDb.collection('usuarios').doc(decoded.uid).get();
     }
-    if (!userDoc.data()?.ativo) return { user: null, error: _json({ success: false, message: 'Usuário não encontrado' }, 401) };
+
+    if (!userDoc.data()?.ativo) {
+      console.log(`[AUTH] FAIL: User ${decoded.uid} is inactive`);
+      return { user: null, error: _json({ success: false, message: 'Usuário não autenticado ou sem permissão para acessar equipamentos.' }, 401) };
+    }
+
+    console.log(`[AUTH] OK: User ${decoded.uid} (${userData?.role}) authenticated for ${route}`);
     return { user: { id: userDoc.id, ...userDoc.data() } };
   } catch (e: any) {
-    console.error('Auth error:', e?.message);
-    return { user: null, error: _json({ success: false, message: 'Token inválido' }, 401) };
+    console.error(`[AUTH] FAIL: Token verification error: ${e?.message} | Code: ${e?.code}`);
+    return { user: null, error: _json({ success: false, message: `Usuário não autenticado ou sem permissão para acessar equipamentos. (${e?.message})` }, 401) };
   }
 }
 
@@ -143,6 +164,8 @@ export default async function handler(nodeReq: any, nodeRes: any) {
       headers,
       body: bodyStr || undefined,
     });
+
+    console.log(`[API] ${nodeReq.method} ${nodeReq.url}`);
 
     const response = await handleRequest(request);
 
@@ -246,6 +269,8 @@ async function handleAuth(req: Request, path: string, params: Record<string, str
 async function handleEquipamentos(req: Request, path: string, params: Record<string, string>) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
+
+  console.log(`[EQUIP] Route: ${path} | Method: ${req.method} | User: ${auth.user.email} (${auth.user.role})`);
 
   if (path === '/equipamentos/stats' && req.method === 'GET') {
     let total = 0, online = 0, offline = 0, tonersBaixos = 0, alertasCriticos = 0, paginas = 0;

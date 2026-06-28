@@ -35,22 +35,37 @@ async function getFirebaseToken(): Promise<string | null> {
   try {
     const user = auth.currentUser;
     if (!user) {
+      console.log('[TOKEN] auth.currentUser is null — waiting for onAuthStateChanged...');
       return new Promise<string | null>((resolve) => {
-        const timeout = setTimeout(() => resolve(null), 5000);
+        const timeout = setTimeout(() => {
+          console.log('[TOKEN] FAIL: onAuthStateChanged timed out (5s)');
+          resolve(null);
+        }, 5000);
         const unsubscribe = fbOnAuthStateChanged(auth, (u) => {
           clearTimeout(timeout);
           unsubscribe();
           if (u) {
-            u.getIdToken().then(resolve).catch(() => resolve(null));
+            console.log(`[TOKEN] Got user from onAuthStateChanged: ${u.uid}`);
+            u.getIdToken(true).then((t) => {
+              console.log(`[TOKEN] Token obtained (length: ${t.length})`);
+              resolve(t);
+            }).catch((e) => {
+              console.error('[TOKEN] getIdToken failed:', e);
+              resolve(null);
+            });
           } else {
+            console.log('[TOKEN] No user from onAuthStateChanged');
             resolve(null);
           }
         });
       });
     }
-    return await user.getIdToken();
+    // Force refresh to ensure token is valid
+    const token = await user.getIdToken(true);
+    console.log(`[TOKEN] Token obtained (length: ${token.length})`);
+    return token;
   } catch (e) {
-    console.error('Error getting Firebase token:', e);
+    console.error('[TOKEN] Error getting Firebase token:', e);
     return null;
   }
 }
@@ -98,13 +113,14 @@ async function request<T>(
   })
 
   if (!response.ok) {
-    let data: unknown
+    let data: any
     try {
       data = await response.json()
     } catch {
       data = null
     }
-    throw new ApiError(response.status, `Erro ${response.status}: ${response.statusText}`, data)
+    const msg = data?.message || `Erro ${response.status}: ${response.statusText}`
+    throw new ApiError(response.status, msg, data)
   }
 
   if (response.status === 204) {
