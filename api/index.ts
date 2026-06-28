@@ -79,8 +79,20 @@ async function requireAuth(req: Request): Promise<{ user: any; error?: Response 
   try {
     const token = h.split(' ')[1];
     const decoded = await _adminAuth.verifyIdToken(token);
-    const userDoc = await _adminDb.collection('usuarios').doc(decoded.uid).get();
-    if (!userDoc.exists || !userDoc.data()?.ativo) return { user: null, error: _json({ success: false, message: 'Usuário não encontrado' }, 401) };
+    let userDoc = await _adminDb.collection('usuarios').doc(decoded.uid).get();
+    if (!userDoc.exists) {
+      const userRecord = await _adminAuth.getUser(decoded.uid);
+      await _adminDb.collection('usuarios').doc(decoded.uid).set({
+        nome: userRecord.displayName || userRecord.email?.split('@')[0] || 'User',
+        email: userRecord.email,
+        role: 'admin',
+        ativo: true,
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now()
+      });
+      userDoc = await _adminDb.collection('usuarios').doc(decoded.uid).get();
+    }
+    if (!userDoc.data()?.ativo) return { user: null, error: _json({ success: false, message: 'Usuário não encontrado' }, 401) };
     return { user: { id: userDoc.id, ...userDoc.data() } };
   } catch (e: any) {
     console.error('Auth error:', e?.message);
@@ -162,8 +174,18 @@ async function handleAuth(req: Request, path: string, params: Record<string, str
     if (!email || !senha) return _error('Email e senha são obrigatórios', 400);
     try {
       const userRecord = await _adminAuth.getUserByEmail(email);
-      const userDoc = await _adminDb.collection('usuarios').doc(userRecord.uid).get();
-      if (!userDoc.exists) return _error('Usuário não encontrado', 404);
+      let userDoc = await _adminDb.collection('usuarios').doc(userRecord.uid).get();
+      if (!userDoc.exists) {
+        await _adminDb.collection('usuarios').doc(userRecord.uid).set({
+          nome: userRecord.displayName || email.split('@')[0],
+          email: userRecord.email,
+          role: 'admin',
+          ativo: true,
+          createdAt: Timestamp.now(),
+          updatedAt: Timestamp.now()
+        });
+        userDoc = await _adminDb.collection('usuarios').doc(userRecord.uid).get();
+      }
       const userData = userDoc.data();
       if (!userData?.ativo) return _error('Usuário inativo', 403);
       const customToken = await _adminAuth.createCustomToken(userRecord.uid);

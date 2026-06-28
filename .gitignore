@@ -15,6 +15,7 @@ build/
 # Database
 *.db
 data/
+users.json
 
 # IDE
 .vscode/
