@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
 import Loading from './components/shared/Loading'
 import type { Equipamento } from './types'
-import { getToken, removeToken, getMe } from './services/api'
+import { removeToken, onAuthStateChanged } from './services/api'
 
 const Dashboard = lazy(() => import('./components/Dashboard/Dashboard'))
 const ListaEquipamentos = lazy(() => import('./components/Equipamentos/ListaEquipamentos'))
@@ -33,36 +33,20 @@ export default function App() {
   const [editingEquipamento, setEditingEquipamento] = useState<Equipamento | null>(null)
   const [equipamentoRefreshKey, setEquipamentoRefreshKey] = useState(0)
 
-  const validateToken = useCallback(async () => {
-    const token = getToken()
-    if (!token || token === 'authenticated') {
-      removeToken()
-      localStorage.removeItem('onyx_user')
-      setIsLoading(false)
-      return
-    }
-    try {
-      await getMe()
-      setIsAuthenticated(true)
-    } catch {
-      removeToken()
-      localStorage.removeItem('onyx_user')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [])
-
   useEffect(() => {
-    validateToken()
-  }, [validateToken])
+    const unsubscribe = onAuthStateChanged((user) => {
+      setIsAuthenticated(!!user)
+      setIsLoading(false)
+    })
+    return () => unsubscribe()
+  }, [])
 
   const handleLogin = () => {
     setIsAuthenticated(true)
   }
 
-  const handleLogout = () => {
-    removeToken()
-    localStorage.removeItem('onyx_user')
+  const handleLogout = async () => {
+    await removeToken()
     setIsAuthenticated(false)
   }
 

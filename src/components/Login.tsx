@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { login } from '../services/api'
 
 interface LoginProps {
   onLogin: () => void
@@ -16,21 +17,7 @@ export default function Login({ onLogin }: LoginProps) {
     setLoading(true)
 
     try {
-      const BASE_URL = import.meta.env.VITE_API_URL || 'https://onyx-monitor-api.onrender.com/api'
-      const response = await fetch(`${BASE_URL}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, senha: password }),
-      })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.message || 'Erro ao fazer login')
-      }
-
-      localStorage.setItem('onyx_token', data.data.token)
-      localStorage.setItem('onyx_user', JSON.stringify(data.data.user))
+      await login(email, password)
       onLogin()
     } catch (err: any) {
       setError(err.message || 'Credenciais inválidas')

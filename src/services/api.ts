@@ -352,5 +352,5 @@ export async function deleteAuditoriaConfig(id: string): Promise<void> {
   await request(`/auditoria/config/${id}`, { method: 'DELETE' })
 }
 
-export { ApiError, getFirebaseToken, onAuthStateChanged, signOut }
+export { ApiError, getFirebaseToken as getToken, onAuthStateChanged, signOut as removeToken }
 export type { User } from 'firebase/auth';

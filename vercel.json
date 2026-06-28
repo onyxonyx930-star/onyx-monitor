@@ -38,13 +38,5 @@
         }
       ]
     }
-  ],
-  "env": {
-    "FIREBASE_PROJECT_ID": "@firebase-project-id",
-    "FIREBASE_CLIENT_EMAIL": "@firebase-client-email",
-    "FIREBASE_PRIVATE_KEY": "@firebase-private-key",
-    "VITE_FIREBASE_API_KEY": "@firebase-api-key",
-    "VITE_FIREBASE_AUTH_DOMAIN": "@firebase-auth-domain",
-    "VITE_FIREBASE_PROJECT_ID": "@firebase-project-id"
-  }
+  ]
 }
