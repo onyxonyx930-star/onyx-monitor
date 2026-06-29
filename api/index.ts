@@ -10,6 +10,8 @@ async function loadDeps() {
     const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
     const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
 
+    console.log(`[FIREBASE-ADMIN] projectId=${projectId || 'MISSING'}, clientEmail=${clientEmail || 'MISSING'}, privateKey=${privateKey ? 'SET (' + privateKey.length + ' chars)' : 'MISSING'}`);
+
     if (!projectId || !clientEmail || !privateKey) {
       throw new Error('Missing Firebase Admin credentials');
     }
@@ -20,6 +22,7 @@ async function loadDeps() {
 
     _adminDb = getFirestore();
     _adminAuth = getAuth();
+    console.log(`[FIREBASE-ADMIN] Initialized for project: ${projectId}`);
   }
 }
 
@@ -185,6 +188,22 @@ async function handleRequest(request: Request): Promise<Response> {
   const { path, params } = parseUrl(request.url);
 
   if (path === '/health') return _json({ status: 'ok', timestamp: new Date().toISOString() });
+  if (path === '/auth/debug' && request.method === 'GET') {
+    const projectId = process.env.FIREBASE_PROJECT_ID || 'NOT SET';
+    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL || 'NOT SET';
+    const hasPrivateKey = !!process.env.FIREBASE_PRIVATE_KEY;
+    const privateKeyLength = process.env.FIREBASE_PRIVATE_KEY?.length || 0;
+    return _json({
+      success: true,
+      data: {
+        backend_project: projectId,
+        backend_client_email: clientEmail,
+        backend_has_private_key: hasPrivateKey,
+        backend_private_key_length: privateKeyLength,
+        message: 'Compare backend_project with frontend projectId. They MUST match.'
+      }
+    });
+  }
   if (path.startsWith('/auth')) return handleAuth(request, path, params);
   if (path.startsWith('/equipamentos')) return handleEquipamentos(request, path, params);
   if (path.startsWith('/leituras')) return handleLeituras(request, path, params);

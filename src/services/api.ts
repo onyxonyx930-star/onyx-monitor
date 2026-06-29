@@ -35,14 +35,15 @@ async function getFirebaseToken(): Promise<string | null> {
   try {
     const user = auth.currentUser;
     if (!user) {
-      console.log('[TOKEN] auth.currentUser is null');
+      console.warn('[TOKEN] auth.currentUser is null — user may not be logged in');
       return null;
     }
+    console.log(`[TOKEN] Getting token for: ${user.email} (${user.uid})`);
     const token = await user.getIdToken(true);
     console.log(`[TOKEN] Token OK (length: ${token.length})`);
     return token;
-  } catch (e) {
-    console.error('[TOKEN] Error:', e);
+  } catch (e: any) {
+    console.error('[TOKEN] Error:', e?.message || e);
     return null;
   }
 }
@@ -53,7 +54,7 @@ async function buildAuthHeaders(): Promise<HeadersInit> {
   if (token) {
     headers['Authorization'] = `Bearer ${token}`
   } else {
-    console.log('[AUTH] No token — request will be unauthenticated')
+    console.warn('[AUTH] No token available — request will fail with 401')
   }
   return headers
 }
@@ -88,13 +89,17 @@ async function request<T>(
   })
 
   if (response.status === 401 && !_retry) {
-    console.log('[REQUEST] Got 401 — retrying with fresh token...')
-    // Force token refresh
+    console.warn('[REQUEST] Got 401 — retrying with fresh token...')
     const user = auth.currentUser;
     if (user) {
       try {
         await user.getIdToken(true);
-      } catch {}
+        console.log('[REQUEST] Token refreshed');
+      } catch (e) {
+        console.error('[REQUEST] Token refresh failed:', e);
+      }
+    } else {
+      console.warn('[REQUEST] No user logged in — cannot refresh token');
     }
     return request<T>(endpoint, options, true)
   }
@@ -107,6 +112,7 @@ async function request<T>(
       data = null
     }
     const msg = data?.message || `Erro ${response.status}: ${response.statusText}`
+    console.error(`[REQUEST] Error ${response.status}: ${msg}`)
     throw new ApiError(response.status, msg, data)
   }
 

@@ -2,13 +2,15 @@ import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
 import { getAuth, Auth, connectAuthEmulator } from 'firebase/auth';
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyCgK2kLEdeZBBTdzaPpOvF3pYBZrPPV218',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'onyx-solution.firebaseapp.com',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'onyx-solution',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'onyx-solution.firebasestorage.app',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || '',
 };
+
+console.log(`[FIREBASE] Config: apiKey=${firebaseConfig.apiKey ? 'set' : 'MISSING'}, projectId=${firebaseConfig.projectId}, authDomain=${firebaseConfig.authDomain}`);
 
 let app: FirebaseApp;
 let auth: Auth;
